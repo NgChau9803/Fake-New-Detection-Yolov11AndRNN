@@ -1,10 +1,14 @@
 # Dataset Configuration
 data:
+  processed_dir: "data/processed"
+  images_dir: "data/images"
+  cache_dir: "data/cache"
+  
   fakeddit:
     files:
-      - "data/raw/fakeddit/multimodal_test_public.tsv"
       - "data/raw/fakeddit/multimodal_train.tsv"
-      - "data/raw/fakeddit/multimodal_validate.tsv"
+      - "data/raw/fakeddit/multimodal_test.tsv"
+      - "data/raw/fakeddit/multimodal_evaluate.tsv"
     file_type: "tsv"
     label_mapping:
       real: 0
@@ -19,7 +23,7 @@ data:
     text_columns:
       - title
       - clean_title
-    image_url_column: "image_url"
+    image_path_column: "image_path"
     id_column: "id"
     label_column: "2_way_label"
     preprocessing:
@@ -34,28 +38,42 @@ data:
         color_mode: "rgb"
         interpolation: "bilinear"
         rescale: 1.0/255.0
-  
+
   fakenewnet:
-    dataset_dir: "data/raw/fakenewnet"  # Base directory for the dataset
-    sources: ["politifact", "gossipcop"]  # Available sources
-    labels: ["fake", "real"]  # Available labels
-    id_column: "id"
-    text_column: "text"
-    clean_text_column: "clean_text"
-    image_url_column: "image_url"
-    label_column: "label"
+    files:
+      - "data/raw/fakenewnet/train.json"
+      - "data/raw/fakenewnet/test.json"
+      - "data/raw/fakenewnet/validation.json"
+    file_type: "json"
+    label_mapping:
+      real: 0
+      fake: 1
     metadata_columns:
-      - "source"
-      - "publish_date"
-      - "source_url"
-      - "authors"
-      - "keywords"
-      - "canonical_link"
-      - "summary"
+      - source
+      - publish_date
+      - authors
+      - keywords
+      - canonical_link
+      - summary
+    text_columns:
+      - text
+      - title
+    image_url_columns:
+      - top_img
+      - images
+    preprocessing:
+      text:
+        max_length: 128
+        padding: "max_length"
+        truncation: true
+      image:
+        max_size: 224
+        min_size: 32
+        aspect_ratio_range: [0.75, 1.33]
+        color_mode: "rgb"
+        interpolation: "bilinear"
+        rescale: 1.0/255.0
   
-  processed_dir: "data/processed"
-  images_dir: "data/images"
-  cache_dir: "data/cache"
   train_ratio: 0.8
   val_ratio: 0.1
   test_ratio: 0.1

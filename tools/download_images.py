@@ -1,15 +1,14 @@
 import os
-import pandas as pd
+import json
 import argparse
 import concurrent.futures
 from tqdm import tqdm
 import yaml
 import sys
+import requests
 
 # Add the project root to the path so we can import our modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.data.image_utils import download_image
 
 def load_config(config_path):
     """Load configuration from YAML file"""
@@ -17,26 +16,46 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     return config
 
-def download_images_from_dataset(dataset_path, output_dir, num_workers=4):
-    """Download images from URLs in the dataset"""
+def download_image(url, output_path):
+    """Download image from URL and save to disk"""
+    try:
+        # Skip if image already exists
+        if os.path.exists(output_path):
+            return True
+            
+        # Download image
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        # Save image
+        with open(output_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        return True
+    except Exception as e:
+        print(f"Error downloading image from {url}: {e}")
+        return False
+
+def download_fakenewnet_images(dataset_path, output_dir, num_workers=4):
+    """Download images from FakeNewNet dataset"""
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load dataset
-    if dataset_path.endswith('.tsv'):
-        df = pd.read_csv(dataset_path, sep='\t')
-    else:
-        df = pd.read_csv(dataset_path)
+    # Load JSON file
+    with open(dataset_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
     
     # Extract image URLs and IDs
-    if 'image_url' in df.columns and 'id' in df.columns:
-        image_data = list(zip(df['id'], df['image_url']))
-    else:
-        print("Error: Dataset must contain 'id' and 'image_url' columns")
-        return
+    image_data = []
     
-    # Filter out rows with missing URLs
-    image_data = [(id_, url) for id_, url in image_data if isinstance(url, str) and url]
+    # Add top image if available
+    if data.get('top_img'):
+        image_data.append((data['id'], data['top_img'], '_top'))
+    
+    # Add all images from the images list
+    for i, url in enumerate(data.get('images', [])):
+        image_data.append((data['id'], url, f'_{i}'))
     
     print(f"Found {len(image_data)} images to download")
     
@@ -44,10 +63,8 @@ def download_images_from_dataset(dataset_path, output_dir, num_workers=4):
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         # Create download tasks
         def download_task(item):
-            id_, url = item
-            output_path = os.path.join(output_dir, f"{id_}.jpg")
-            if os.path.exists(output_path):
-                return True  # Skip if already downloaded
+            id_, url, suffix = item
+            output_path = os.path.join(output_dir, f"{id_}{suffix}.jpg")
             return download_image(url, output_path)
         
         # Execute tasks with progress bar
@@ -63,7 +80,7 @@ def download_images_from_dataset(dataset_path, output_dir, num_workers=4):
     print(f"Images saved to: {output_dir}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Download images from dataset')
+    parser = argparse.ArgumentParser(description='Download images from FakeNewNet dataset')
     parser.add_argument('--config', type=str, default='../config/config.yaml', help='Path to configuration file')
     parser.add_argument('--dataset', type=str, help='Path to dataset file (overrides config)')
     parser.add_argument('--output', type=str, help='Output directory for images (overrides config)')
@@ -75,10 +92,11 @@ def main():
     config = load_config(args.config)
     
     # Use command-line arguments if provided, otherwise use config
-    dataset_path = args.dataset or config['data']['fakeddit_path']
+    dataset_path = args.dataset or config['data']['fakenewnet']['files'][0]  # Use first file
     output_dir = args.output or config['data']['images_dir']
     
-    download_images_from_dataset(dataset_path, output_dir, args.workers)
+    # Download images
+    download_fakenewnet_images(dataset_path, output_dir, args.workers)
 
 if __name__ == "__main__":
     main() 

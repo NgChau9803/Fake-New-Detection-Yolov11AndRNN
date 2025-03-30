@@ -9,6 +9,7 @@ from tqdm import tqdm
 from sklearn.utils import resample
 from src.data.image_utils import download_image, preprocess_image, augment_image
 from src.data.text_utils import preprocess_text
+import requests
 
 class DatasetProcessor:
     def __init__(self, config):
@@ -62,16 +63,24 @@ class DatasetProcessor:
                         print(f"Warning: Missing required columns in {file_path}: {missing_columns}")
                         continue
                     
+                    # Map image paths using post IDs
+                    df['image_path'] = df['id'].apply(lambda x: os.path.join(self.images_dir, f"{x}.jpg"))
+                    
+                    # Check if images exist
+                    df['has_image'] = df['image_path'].apply(os.path.exists)
+                    print(f"Found {df['has_image'].sum()} images out of {len(df)} posts")
+                    
                     # Standardize column names and create metadata
                     standardized_df = pd.DataFrame({
                         'id': df['id'],
                         'text': df['title'],
                         'clean_text': df['clean_title'],
-                        'image_url': df['image_url'],
-                        'label': df['2_way_label'],  # Using 2-way label for binary classification
+                        'image_path': df['image_path'],
+                        'label': df['2_way_label'],
                         'metadata': df[['author', 'subreddit', 'domain', 'score', 'upvote_ratio', 'num_comments']].to_dict('records'),
                         'dataset_source': 'fakeddit',
-                        'file_source': file_path
+                        'file_source': file_path,
+                        'has_image': df['has_image']
                     })
                     
                     # Print dataset statistics
@@ -79,7 +88,7 @@ class DatasetProcessor:
                     print(f"Total samples: {len(standardized_df)}")
                     print(f"Label distribution:\n{standardized_df['label'].value_counts()}")
                     print(f"Average text length: {standardized_df['text'].str.len().mean():.2f}")
-                    print(f"Images available: {standardized_df['image_url'].notna().sum()} ({standardized_df['image_url'].notna().sum()/len(standardized_df)*100:.2f}%)")
+                    print(f"Images available: {standardized_df['has_image'].sum()} ({standardized_df['has_image'].sum()/len(standardized_df)*100:.2f}%)")
                     
                     # Print metadata statistics
                     print("\nMetadata Statistics:")
@@ -104,7 +113,7 @@ class DatasetProcessor:
             print("\nCombined Fakeddit Dataset Statistics:")
             print(f"Total samples: {len(combined_df)}")
             print(f"Label distribution:\n{combined_df['label'].value_counts()}")
-            print(f"Images available: {combined_df['image_url'].notna().sum()} ({combined_df['image_url'].notna().sum()/len(combined_df)*100:.2f}%)")
+            print(f"Images available: {combined_df['has_image'].sum()} ({combined_df['has_image'].sum()/len(combined_df)*100:.2f}%)")
             
             return combined_df
         else:
@@ -112,78 +121,116 @@ class DatasetProcessor:
             return pd.DataFrame()
             
     def load_fakenewnet(self):
-        """Load and standardize multiple FakeNewNet dataset files from JSON structure"""
+        """Load and standardize FakeNewNet dataset files"""
         fakenewnet_config = self.config['data']['fakenewnet']
-        dataset_dir = fakenewnet_config.get('dataset_dir', 'fakenewsnet_dataset')
-        sources = fakenewnet_config.get('sources', ['politifact', 'gossipcop'])
-        labels = fakenewnet_config.get('labels', ['fake', 'real'])
+        fakenewnet_files = fakenewnet_config['files']
         
         all_data = []
         
-        for source in sources:
-            for label in labels:
-                news_items = []
-                source_dir = os.path.join(dataset_dir, source, label)
-                
-                if not os.path.exists(source_dir):
-                    print(f"Warning: Directory not found: {source_dir}")
-                    continue
+        for file_path in fakenewnet_files:
+            try:
+                if os.path.exists(file_path):
+                    # Load TSV file
+                    df = pd.read_csv(file_path, sep='\t')
                     
-                news_ids = os.listdir(source_dir)
-                print(f"Processing {source}_{label}: {len(news_ids)} items")
-                
-                for news_id in tqdm(news_ids, desc=f"Processing {source}_{label}"):
-                    news_path = os.path.join(source_dir, news_id, "news content.json")
+                    # Check for required columns
+                    required_columns = [
+                        'id',
+                        'text',
+                        'title',
+                        'label',
+                        'source',
+                        'publish_date',
+                        'authors',
+                        'keywords',
+                        'canonical_link',
+                        'summary'
+                    ]
                     
-                    if not os.path.exists(news_path):
+                    missing_columns = [col for col in required_columns if col not in df.columns]
+                    if missing_columns:
+                        print(f"Warning: Missing required columns in {file_path}: {missing_columns}")
                         continue
-                        
-                    try:
-                        with open(news_path, 'r', encoding='utf-8') as f:
-                            news_data = json.load(f)
-                            
-                            # Extract relevant fields from the JSON structure
-                            item = {
-                                'id': news_id,
-                                'text': news_data.get('title', '') + ' ' + news_data.get('text', ''),
-                                'clean_text': news_data.get('title', '') + ' ' + news_data.get('text', ''),
-                                'image_url': news_data.get('top_img', ''),  # Using top_img as primary image
-                                'label': 1 if label == 'fake' else 0,  # 1 for fake, 0 for real
-                                'metadata': {
-                                    'source': source,
-                                    'publish_date': news_data.get('publish_date', ''),
-                                    'source_url': news_data.get('url', ''),
-                                    'authors': news_data.get('authors', []),
-                                    'keywords': news_data.get('keywords', []),
-                                    'canonical_link': news_data.get('canonical_link', ''),
-                                    'summary': news_data.get('summary', '')
-                                },
-                                'dataset_source': 'fakenewnet',
-                                'file_source': f"{source}_{label}"
-                            }
-                            news_items.append(item)
-                    except Exception as e:
-                        print(f"Error processing {news_path}: {str(e)}")
-                
-                if news_items:
-                    df = pd.DataFrame(news_items)
-                    all_data.append(df)
-                    print(f"Loaded {len(df)} records from {source}_{label}")
+                    
+                    # Map image paths using article IDs
+                    df['image_paths'] = df['id'].apply(lambda x: [
+                        os.path.join(self.images_dir, f"{x}_top.jpg"),
+                        *[os.path.join(self.images_dir, f"{x}_{i}.jpg") for i in range(10)]  # Assuming max 10 images per article
+                    ])
+                    
+                    # Check which images exist
+                    df['image_paths'] = df['image_paths'].apply(lambda paths: [p for p in paths if os.path.exists(p)])
+                    df['has_image'] = df['image_paths'].apply(len) > 0
+                    
+                    # Standardize column names and create metadata
+                    standardized_df = pd.DataFrame({
+                        'id': df['id'],
+                        'text': df['text'],
+                        'clean_text': df['title'],
+                        'image_paths': df['image_paths'],
+                        'label': df['label'],
+                        'metadata': df[['source', 'publish_date', 'authors', 'keywords', 'canonical_link', 'summary']].to_dict('records'),
+                        'dataset_source': 'fakenewnet',
+                        'file_source': file_path,
+                        'has_image': df['has_image']
+                    })
+                    
+                    # Print dataset statistics
+                    print(f"\nFakeNewNet Dataset Statistics from {file_path}:")
+                    print(f"Total samples: {len(standardized_df)}")
+                    print(f"Label distribution:\n{standardized_df['label'].value_counts()}")
+                    print(f"Average text length: {standardized_df['text'].str.len().mean():.2f}")
+                    print(f"Images available: {standardized_df['has_image'].sum()} ({standardized_df['has_image'].sum()/len(standardized_df)*100:.2f}%)")
+                    
+                    # Print metadata statistics
+                    print("\nMetadata Statistics:")
+                    print(f"Number of unique sources: {len(df['source'].unique())}")
+                    print(f"Number of unique authors: {len(set(author for authors in df['authors'] for author in authors))}")
+                    
+                    all_data.append(standardized_df)
+                    print(f"\nLoaded {len(standardized_df)} records from {file_path}")
+                else:
+                    print(f"Warning: File not found: {file_path}")
+            except Exception as e:
+                print(f"Error loading FakeNewNet dataset file {file_path}: {e}")
         
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
-            print(f"Total records loaded: {len(combined_df)}")
             
-            # Print label distribution
-            label_counts = combined_df['label'].value_counts()
-            print("Label distribution in FakeNewNet dataset:")
-            for label, count in label_counts.items():
-                print(f"  Label {label}: {count} records ({count/len(combined_df)*100:.2f}%)")
+            # Print combined dataset statistics
+            print("\nCombined FakeNewNet Dataset Statistics:")
+            print(f"Total samples: {len(combined_df)}")
+            print(f"Label distribution:\n{combined_df['label'].value_counts()}")
+            print(f"Images available: {combined_df['has_image'].sum()} ({combined_df['has_image'].sum()/len(combined_df)*100:.2f}%)")
             
             return combined_df
         else:
-            print("No valid FakeNewNet data found.")
+            print("No valid FakeNewNet data files found.")
             return pd.DataFrame()
+    
+    def _download_image(self, url, filename):
+        """Download image from URL and save to disk"""
+        try:
+            # Create full path
+            image_path = os.path.join(self.images_dir, filename)
+            
+            # Skip if image already exists
+            if os.path.exists(image_path):
+                return image_path
+            
+            # Download image
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            
+            # Save image
+            with open(image_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            return image_path
+        except Exception as e:
+            print(f"Error downloading image from {url}: {e}")
+            return None
     
     def combine_datasets(self):
         """Combine standardized datasets"""
@@ -281,7 +328,7 @@ class DatasetProcessor:
         print("Processing image data...")
         def process_image_url(row):
             image_id = row['id']
-            image_url = row['image_url']
+            image_url = row['image_path']
             image_path = os.path.join(self.images_dir, f"{image_id}.jpg")
             
             if not pd.isna(image_url) and isinstance(image_url, str) and image_url.strip():
