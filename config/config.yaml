@@ -78,7 +78,7 @@ model:
     num_classes: 2  # Binary classification
   image:
     input_shape: [224, 224, 3]
-    backbone: "yolov11-tiny"
+    backbone: "yolov11"
     feature_dim: 512
     dropout_rate: 0.2
     use_attention: true
