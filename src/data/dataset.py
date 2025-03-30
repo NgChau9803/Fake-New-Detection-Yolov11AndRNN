@@ -29,7 +29,7 @@ class DatasetProcessor:
         self.balanced_sampling = config['data'].get('balanced_sampling', False)
         
     def load_fakeddit(self):
-        """Load and standardize multiple Fakeddit dataset files"""
+        """Load and standardize Fakeddit dataset files"""
         fakeddit_config = self.config['data']['fakeddit']
         fakeddit_files = fakeddit_config['files']
         file_type = fakeddit_config['file_type']
@@ -39,18 +39,22 @@ class DatasetProcessor:
         for file_path in fakeddit_files:
             try:
                 if os.path.exists(file_path):
-                    # Load based on file type
-                    if file_type.lower() == 'tsv':
-                        df = pd.read_csv(file_path, sep='\t')
-                    else:
-                        df = pd.read_csv(file_path)
+                    # Load TSV file
+                    df = pd.read_csv(file_path, sep='\t')
                     
                     # Check for required columns
                     required_columns = [
-                        fakeddit_config['id_column'],
-                        fakeddit_config['text_column'],
-                        fakeddit_config['image_url_column'],
-                        fakeddit_config['label_column']
+                        'id',
+                        'title',
+                        'clean_title',
+                        'image_url',
+                        '2_way_label',
+                        'author',
+                        'subreddit',
+                        'domain',
+                        'score',
+                        'upvote_ratio',
+                        'num_comments'
                     ]
                     
                     missing_columns = [col for col in required_columns if col not in df.columns]
@@ -58,30 +62,51 @@ class DatasetProcessor:
                         print(f"Warning: Missing required columns in {file_path}: {missing_columns}")
                         continue
                     
-                    # Extract metadata columns that exist in the DataFrame
-                    metadata_columns = [col for col in fakeddit_config['metadata_columns'] if col in df.columns]
-                    
-                    # Standardize column names
+                    # Standardize column names and create metadata
                     standardized_df = pd.DataFrame({
-                        'id': df[fakeddit_config['id_column']],
-                        'text': df[fakeddit_config['text_column']],
-                        'clean_text': df[fakeddit_config['clean_text_column']] if fakeddit_config['clean_text_column'] in df.columns else df[fakeddit_config['text_column']],
-                        'image_url': df[fakeddit_config['image_url_column']],
-                        'label': df[fakeddit_config['label_column']],
-                        'metadata': df[metadata_columns].to_dict('records'),
+                        'id': df['id'],
+                        'text': df['title'],
+                        'clean_text': df['clean_title'],
+                        'image_url': df['image_url'],
+                        'label': df['2_way_label'],  # Using 2-way label for binary classification
+                        'metadata': df[['author', 'subreddit', 'domain', 'score', 'upvote_ratio', 'num_comments']].to_dict('records'),
                         'dataset_source': 'fakeddit',
                         'file_source': file_path
                     })
                     
+                    # Print dataset statistics
+                    print(f"\nFakeddit Dataset Statistics from {file_path}:")
+                    print(f"Total samples: {len(standardized_df)}")
+                    print(f"Label distribution:\n{standardized_df['label'].value_counts()}")
+                    print(f"Average text length: {standardized_df['text'].str.len().mean():.2f}")
+                    print(f"Images available: {standardized_df['image_url'].notna().sum()} ({standardized_df['image_url'].notna().sum()/len(standardized_df)*100:.2f}%)")
+                    
+                    # Print metadata statistics
+                    print("\nMetadata Statistics:")
+                    print(f"Number of unique authors: {len(df['author'].unique())}")
+                    print(f"Number of unique subreddits: {len(df['subreddit'].unique())}")
+                    print(f"Number of unique domains: {len(df['domain'].unique())}")
+                    print(f"Average score: {df['score'].mean():.2f}")
+                    print(f"Average upvote ratio: {df['upvote_ratio'].mean():.2f}")
+                    print(f"Average number of comments: {df['num_comments'].mean():.2f}")
+                    
                     all_data.append(standardized_df)
-                    print(f"Loaded {len(standardized_df)} records from {file_path}")
+                    print(f"\nLoaded {len(standardized_df)} records from {file_path}")
                 else:
                     print(f"Warning: File not found: {file_path}")
             except Exception as e:
                 print(f"Error loading Fakeddit dataset file {file_path}: {e}")
         
         if all_data:
-            return pd.concat(all_data, ignore_index=True)
+            combined_df = pd.concat(all_data, ignore_index=True)
+            
+            # Print combined dataset statistics
+            print("\nCombined Fakeddit Dataset Statistics:")
+            print(f"Total samples: {len(combined_df)}")
+            print(f"Label distribution:\n{combined_df['label'].value_counts()}")
+            print(f"Images available: {combined_df['image_url'].notna().sum()} ({combined_df['image_url'].notna().sum()/len(combined_df)*100:.2f}%)")
+            
+            return combined_df
         else:
             print("No valid Fakeddit data files found.")
             return pd.DataFrame()
