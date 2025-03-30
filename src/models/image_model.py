@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 class ImageFeatureExtractor(tf.keras.Model):
-    def __init__(self, input_shape=(224, 224, 3), backbone="yolov11-tiny"):
+    def __init__(self, input_shape=(224, 224, 3), backbone="yolov11"):
         super(ImageFeatureExtractor, self).__init__()
         
         self.input_shape = input_shape
@@ -48,7 +48,7 @@ class ImageFeatureExtractor(tf.keras.Model):
         input_layer = tf.keras.layers.Input(shape=input_shape)
         
         # Build backbone
-        if backbone == "yolov11-tiny":
+        if backbone == "yolov11":
             backbone_output = create_yolov11_backbone()
         else:
             raise ValueError(f"Unsupported backbone: {backbone}")
