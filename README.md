@@ -95,5 +95,4 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 ## Citation
 
-If you use this code in your research, please cite:
-[Your citation information here] 
+If you use this code in your research, please cite
