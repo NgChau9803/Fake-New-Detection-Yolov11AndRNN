@@ -1,0 +1,37 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+.venv/
+env/
+ENV/
+
+/data/
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data directories
+data/images/
+data/processed/
+data/embeddings/
+src/data/raw/
+
+# Logs
+logs/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo 

@@ -1,0 +1,96 @@
+# Dataset Configuration
+data:
+  fakeddit:
+    files:
+      - "data/raw/fakeddit/multimodal_train_sample.tsv"
+      - "data/raw/fakeddit/multimodal_test_sample.tsv"
+    file_type: "tsv"
+    id_column: "id"
+    text_column: "title"
+    clean_text_column: "clean_title"
+    image_url_column: "image_url"
+    label_column: "2_way_label"
+    metadata_columns:
+      - "author"
+      - "subreddit"
+      - "domain"
+      - "score"
+      - "upvote_ratio"
+  
+  fakenewnet:
+    dataset_dir: "data/raw/fakenewnet"  # Base directory for the dataset
+    sources: ["politifact", "gossipcop"]  # Available sources
+    labels: ["fake", "real"]  # Available labels
+    # The following fields are now handled internally by the loader
+    # and don't need to be specified in the config
+    id_column: "id"
+    text_column: "text"
+    clean_text_column: "clean_text"
+    image_url_column: "image_url"
+    label_column: "label"
+    metadata_columns:
+      - "source"
+      - "publish_date"
+      - "source_url"
+      - "authors"
+      - "keywords"
+      - "canonical_link"
+      - "summary"
+  
+  processed_dir: "data/processed"
+  images_dir: "data/images"
+  cache_dir: "data/cache"  # New directory for feature caching
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  max_text_length: 100
+  vocab_size: 10000
+  balanced_sampling: true  # Enable balanced sampling for imbalanced datasets
+  cache_features: true     # Enable feature caching for faster training
+
+# Model Configuration
+model:
+  text:
+    embedding_dim: 300
+    rnn_units: 128
+    dropout: 0.2
+    attention_heads: 4   
+    visualize_attention: true  # Visualize attention weights
+  
+  image:
+    input_shape: [224, 224, 3]
+    backbone: "yolov11-tiny"
+    augmentation:
+      enabled: true
+      flip: true
+      rotation: 0.1
+      zoom: 0.1
+      contrast: 0.1
+      brightness: 0.1
+      shift: 0.1
+  
+  fusion:
+    hidden_dims: [512, 128]
+    dropout: 0.3
+    fusion_method: "concat"  # Options: concat, attention, bilinear
+    
+# Training Configuration
+training:
+  batch_size: 32
+  epochs: 10
+  learning_rate: 0.001
+  early_stopping_patience: 3
+  use_class_weights: true
+  optimizer: "adam"  # Options: adam, sgd, rmsprop
+  lr_schedule:
+    enabled: true
+    decay_rate: 0.9
+    decay_steps: 1000
+  
+# Evaluation Configuration
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "auc"]
+  num_explanation_samples: 5
+  cross_dataset_validation: true  # Test on datasets not used in training
+  confusion_matrix: true
+  classification_report: true 
