@@ -2,21 +2,38 @@
 data:
   fakeddit:
     files:
-      - "data/raw/fakeddit/multimodal_train_sample.tsv"
-      - "data/raw/fakeddit/multimodal_test_sample.tsv"
-      - "data/raw/fakeddit/multimodal_eval_sample.tsv"
+      - "data/raw/fakeddit/multimodal_test_public.tsv"
+      - "data/raw/fakeddit/multimodal_train.tsv"
+      - "data/raw/fakeddit/multimodal_validate.tsv"
     file_type: "tsv"
-    id_column: "id"
-    text_column: "title"
-    clean_text_column: "clean_title"
-    image_url_column: "image_url"
-    label_column: "2_way_label"
+    label_mapping:
+      real: 0
+      fake: 1
     metadata_columns:
-      - "author"
-      - "subreddit"
-      - "domain"
-      - "score"
-      - "upvote_ratio"
+      - author
+      - subreddit
+      - domain
+      - score
+      - upvote_ratio
+      - num_comments
+    text_columns:
+      - title
+      - clean_title
+    image_url_column: "image_url"
+    id_column: "id"
+    label_column: "2_way_label"
+    preprocessing:
+      text:
+        max_length: 128
+        padding: "max_length"
+        truncation: true
+      image:
+        max_size: 224
+        min_size: 32
+        aspect_ratio_range: [0.75, 1.33]
+        color_mode: "rgb"
+        interpolation: "bilinear"
+        rescale: 1.0/255.0
   
   fakenewnet:
     dataset_dir: "data/raw/fakenewnet"  # Base directory for the dataset
@@ -52,54 +69,29 @@ model:
   text:
     embedding_dim: 300
     rnn_units: 128
-    dropout: 0.2
     attention_heads: 4
-    attention_dropout: 0.1
-    visualize_attention: true
-    bidirectional: true
-    layer_norm: true
-  
+    dropout_rate: 0.2
+    recurrent_dropout: 0.1
+    use_bidirectional: true
+    use_layer_norm: true
+    max_sequence_length: 128
+    num_classes: 2  # Binary classification
   image:
     input_shape: [224, 224, 3]
     backbone: "yolov11-tiny"
-    backbone_config:
-      initial_filters: 32
-      block_filters: [64, 128, 256]
-      num_blocks: [3, 4, 6]
-      use_batch_norm: true
-      activation: "leaky_relu"
-      activation_alpha: 0.1
-    feature_extraction:
-      pooling: "global_average"
-      feature_dim: 512
-      dropout: 0.3
-    attention:
-      enabled: true
-      attention_dim: 256
-      num_heads: 4
-      dropout: 0.1
-    augmentation:
-      enabled: true
-      flip: true
-      rotation: 0.1
-      zoom: 0.1
-      contrast: 0.1
-      brightness: 0.1
-      shift: 0.1
-      noise: 0.05
-      blur: 0.05
-  
+    feature_dim: 512
+    dropout_rate: 0.2
+    use_attention: true
+    num_classes: 2  # Binary classification
   fusion:
-    hidden_dims: [512, 128]
-    dropout: 0.3
-    fusion_method: "attention"  # Options: concat, attention, bilinear
-    attention_config:
-      num_heads: 4
-      attention_dim: 256
-      dropout: 0.1
-    layer_norm: true
-    residual: true
-    
+    fusion_method: "attention"
+    hidden_dim: 256
+    dropout_rate: 0.2
+    num_heads: 4
+    use_residual: true
+    use_layer_norm: true
+    num_classes: 2  # Binary classification
+  
 # Training Configuration
 training:
   batch_size: 32
