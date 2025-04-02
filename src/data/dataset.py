@@ -123,76 +123,93 @@ class DatasetProcessor:
     def load_fakenewnet(self):
         """Load and standardize FakeNewNet dataset files"""
         fakenewnet_config = self.config['data']['fakenewnet']
-        fakenewnet_files = fakenewnet_config['files']
+        base_dir = fakenewnet_config['base_dir']
+        sources = fakenewnet_config['sources']
+        labels = fakenewnet_config['labels']
         
         all_data = []
         
-        for file_path in fakenewnet_files:
-            try:
-                if os.path.exists(file_path):
-                    # Load TSV file
-                    df = pd.read_csv(file_path, sep='\t')
-                    
-                    # Check for required columns
-                    required_columns = [
-                        'id',
-                        'text',
-                        'title',
-                        'label',
-                        'source',
-                        'publish_date',
-                        'authors',
-                        'keywords',
-                        'canonical_link',
-                        'summary'
-                    ]
-                    
-                    missing_columns = [col for col in required_columns if col not in df.columns]
-                    if missing_columns:
-                        print(f"Warning: Missing required columns in {file_path}: {missing_columns}")
-                        continue
-                    
-                    # Map image paths using article IDs
-                    df['image_paths'] = df['id'].apply(lambda x: [
-                        os.path.join(self.images_dir, f"{x}_top.jpg"),
-                        *[os.path.join(self.images_dir, f"{x}_{i}.jpg") for i in range(10)]  # Assuming max 10 images per article
-                    ])
-                    
-                    # Check which images exist
-                    df['image_paths'] = df['image_paths'].apply(lambda paths: [p for p in paths if os.path.exists(p)])
-                    df['has_image'] = df['image_paths'].apply(len) > 0
-                    
-                    # Standardize column names and create metadata
-                    standardized_df = pd.DataFrame({
-                        'id': df['id'],
-                        'text': df['text'],
-                        'clean_text': df['title'],
-                        'image_paths': df['image_paths'],
-                        'label': df['label'],
-                        'metadata': df[['source', 'publish_date', 'authors', 'keywords', 'canonical_link', 'summary']].to_dict('records'),
-                        'dataset_source': 'fakenewnet',
-                        'file_source': file_path,
-                        'has_image': df['has_image']
-                    })
-                    
-                    # Print dataset statistics
-                    print(f"\nFakeNewNet Dataset Statistics from {file_path}:")
-                    print(f"Total samples: {len(standardized_df)}")
-                    print(f"Label distribution:\n{standardized_df['label'].value_counts()}")
-                    print(f"Average text length: {standardized_df['text'].str.len().mean():.2f}")
-                    print(f"Images available: {standardized_df['has_image'].sum()} ({standardized_df['has_image'].sum()/len(standardized_df)*100:.2f}%)")
+        for source in sources:
+            for label in labels:
+                source_dir = os.path.join(base_dir, source, label)
+                
+                if not os.path.exists(source_dir):
+                    print(f"Warning: Directory not found: {source_dir}")
+                    continue
+                
+                # Get all article directories
+                article_dirs = [d for d in os.listdir(source_dir) if os.path.isdir(os.path.join(source_dir, d))]
+                print(f"Processing {source}_{label}: {len(article_dirs)} articles")
+                
+                for article_dir in tqdm(article_dirs, desc=f"Processing {source}_{label}"):
+                    try:
+                        # Load news content JSON
+                        json_path = os.path.join(source_dir, article_dir, "news content.json")
+                        if not os.path.exists(json_path):
+                            continue
+                            
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        
+                        # Extract article ID from directory name
+                        article_id = article_dir.split('-')[-1]
+                        
+                        # Create standardized data
+                        standardized_data = {
+                            'id': f"{source}_{article_id}",
+                            'text': data.get('text', ''),
+                            'clean_text': data.get('title', ''),
+                            'image_paths': [],  # Will be populated after downloading
+                            'label': 1 if label == 'fake' else 0,
+                            'metadata': {
+                                'source': source,
+                                'publish_date': data.get('publish_date'),
+                                'authors': data.get('authors', []),
+                                'keywords': data.get('keywords', []),
+                                'canonical_link': data.get('canonical_link', ''),
+                                'summary': data.get('summary', ''),
+                                'url': data.get('url', '')
+                            },
+                            'dataset_source': 'fakenewnet',
+                            'file_source': f"{source}_{label}",
+                            'has_image': False
+                        }
+                        
+                        # Map image paths
+                        image_paths = []
+                        
+                        # Add top image if available
+                        if data.get('top_img'):
+                            top_img_path = os.path.join(self.images_dir, f"{standardized_data['id']}_top.jpg")
+                            if os.path.exists(top_img_path):
+                                image_paths.append(top_img_path)
+                        
+                        # Add all images from the images list
+                        for i, _ in enumerate(data.get('images', [])):
+                            img_path = os.path.join(self.images_dir, f"{standardized_data['id']}_{i}.jpg")
+                            if os.path.exists(img_path):
+                                image_paths.append(img_path)
+                        
+                        standardized_data['image_paths'] = image_paths
+                        standardized_data['has_image'] = len(image_paths) > 0
+                        
+                        all_data.append(pd.DataFrame([standardized_data]))
+                        
+                    except Exception as e:
+                        print(f"Error processing {json_path}: {e}")
+                
+                if all_data:
+                    print(f"\nFakeNewNet Dataset Statistics for {source}_{label}:")
+                    current_df = pd.concat(all_data[-len(article_dirs):], ignore_index=True)
+                    print(f"Total samples: {len(current_df)}")
+                    print(f"Label distribution:\n{current_df['label'].value_counts()}")
+                    print(f"Average text length: {current_df['text'].str.len().mean():.2f}")
+                    print(f"Images available: {current_df['has_image'].sum()} ({current_df['has_image'].sum()/len(current_df)*100:.2f}%)")
                     
                     # Print metadata statistics
                     print("\nMetadata Statistics:")
-                    print(f"Number of unique sources: {len(df['source'].unique())}")
-                    print(f"Number of unique authors: {len(set(author for authors in df['authors'] for author in authors))}")
-                    
-                    all_data.append(standardized_df)
-                    print(f"\nLoaded {len(standardized_df)} records from {file_path}")
-                else:
-                    print(f"Warning: File not found: {file_path}")
-            except Exception as e:
-                print(f"Error loading FakeNewNet dataset file {file_path}: {e}")
+                    print(f"Number of unique sources: {len(current_df['metadata'].apply(lambda x: x['source']).unique())}")
+                    print(f"Number of unique authors: {len(set(author for authors in current_df['metadata'].apply(lambda x: x['authors']) for author in authors))}")
         
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)

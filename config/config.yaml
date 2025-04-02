@@ -40,10 +40,9 @@ data:
         rescale: 1.0/255.0
 
   fakenewnet:
-    files:
-      - "data/raw/fakenewnet/train.json"
-      - "data/raw/fakenewnet/test.json"
-      - "data/raw/fakenewnet/validation.json"
+    base_dir: "data/raw/FakeNewNet"
+    sources: ["gossipcop", "politifact"]
+    labels: ["fake", "real"]
     file_type: "json"
     label_mapping:
       real: 0
@@ -55,6 +54,7 @@ data:
       - keywords
       - canonical_link
       - summary
+      - url
     text_columns:
       - text
       - title
@@ -100,7 +100,7 @@ model:
     feature_dim: 512
     dropout_rate: 0.2
     use_attention: true
-    num_classes: 2  # Binary classification
+    num_classes: 2  
   fusion:
     fusion_method: "attention"
     hidden_dim: 256
@@ -108,7 +108,7 @@ model:
     num_heads: 4
     use_residual: true
     use_layer_norm: true
-    num_classes: 2  # Binary classification
+    num_classes: 2 
   
 # Training Configuration
 training:
