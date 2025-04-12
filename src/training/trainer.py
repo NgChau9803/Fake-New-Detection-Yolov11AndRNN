@@ -12,8 +12,10 @@ class ModelTrainer:
         self.model_dir = os.path.join('models', datetime.now().strftime("%Y%m%d-%H%M%S"))
         os.makedirs(self.model_dir, exist_ok=True)
         
-    def create_callbacks(self):
+    def create_callbacks(self, additional_callbacks=None):
         """Create training callbacks"""
+        callbacks = []
+        
         # Model checkpoint to save best model
         checkpoint_path = os.path.join(self.model_dir, 'best_model.h5')
         checkpoint_callback = ModelCheckpoint(
@@ -24,6 +26,7 @@ class ModelTrainer:
             mode='max',
             verbose=1
         )
+        callbacks.append(checkpoint_callback)
         
         # Early stopping to prevent overfitting
         early_stopping = EarlyStopping(
@@ -32,6 +35,7 @@ class ModelTrainer:
             restore_best_weights=True,
             verbose=1
         )
+        callbacks.append(early_stopping)
         
         # TensorBoard for visualization
         log_dir = os.path.join('logs', datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -40,10 +44,15 @@ class ModelTrainer:
             histogram_freq=1,
             write_graph=True
         )
+        callbacks.append(tensorboard_callback)
         
-        return [checkpoint_callback, early_stopping, tensorboard_callback]
+        # Add any additional callbacks
+        if additional_callbacks:
+            callbacks.extend(additional_callbacks)
+        
+        return callbacks
     
-    def train(self, model, train_dataset, val_dataset):
+    def train(self, model, train_dataset, val_dataset, additional_callbacks=None):
         """Train the model"""
         # Compile the model
         optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
@@ -58,7 +67,7 @@ class ModelTrainer:
         )
         
         # Train the model
-        callbacks = self.create_callbacks()
+        callbacks = self.create_callbacks(additional_callbacks)
         
         history = model.fit(
             train_dataset,

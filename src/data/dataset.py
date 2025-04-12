@@ -5,20 +5,30 @@ import tensorflow as tf
 import json
 import pickle
 import hashlib
+import shutil
 from tqdm import tqdm
 from sklearn.utils import resample
 from src.data.image_utils import download_image, preprocess_image, augment_image
 from src.data.text_utils import preprocess_text
 import requests
+from typing import List, Dict, Any
+from .dataset_utils import get_image_paths, standardize_metadata, create_standardized_df, validate_dataset
 
 class DatasetProcessor:
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize dataset processor with configuration"""
         self.config = config
+        self.raw_dir = config['data']['raw_dir']
         self.processed_dir = config['data']['processed_dir']
         self.images_dir = config['data']['images_dir']
         self.cache_dir = config['data']['cache_dir']
         
+        # Check if the raw_dir is an absolute path (indicating it's on a different drive)
+        self.raw_dir_is_absolute = os.path.isabs(self.raw_dir)
+        
         # Create directories if they don't exist
+        if self.raw_dir_is_absolute:
+            os.makedirs(self.raw_dir, exist_ok=True)
         os.makedirs(self.processed_dir, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -29,202 +39,226 @@ class DatasetProcessor:
         # Set up balanced sampling configuration
         self.balanced_sampling = config['data'].get('balanced_sampling', False)
         
-    def load_fakeddit(self):
-        """Load and standardize Fakeddit dataset files"""
-        fakeddit_config = self.config['data']['fakeddit']
-        fakeddit_files = fakeddit_config['files']
-        file_type = fakeddit_config['file_type']
+    def process_datasets(self):
+        """Process all datasets and save standardized data"""
+        print("Processing datasets...")
         
-        all_data = []
+        # Process Fakeddit dataset
+        fakeddit_df = self.load_fakeddit()
+        if not fakeddit_df.empty:
+            self._save_processed_data(fakeddit_df, 'fakeddit')
         
-        for file_path in fakeddit_files:
+        # Process FakeNewNet dataset
+        fakenewnet_df = self.load_fakenewnet()
+        if not fakenewnet_df.empty:
+            self._save_processed_data(fakenewnet_df, 'fakenewnet')
+        
+        # Combine datasets if both are available
+        if not fakeddit_df.empty and not fakenewnet_df.empty:
+            combined_df = pd.concat([fakeddit_df, fakenewnet_df], ignore_index=True)
+            self._save_processed_data(combined_df, 'combined')
+            
+        print("Dataset processing complete!")
+    
+    def _save_processed_data(self, df: pd.DataFrame, dataset_name: str):
+        """Save processed dataset to CSV file"""
+        output_path = os.path.join(self.processed_dir, f"{dataset_name}_processed.csv")
+        df.to_csv(output_path, index=False)
+        print(f"Saved processed {dataset_name} dataset to {output_path}")
+        
+        # Save statistics
+        stats_path = os.path.join(self.processed_dir, f"{dataset_name}_stats.txt")
+        with open(stats_path, 'w') as f:
+            f.write(f"{dataset_name.upper()} Dataset Statistics\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Total samples: {len(df)}\n")
+            f.write(f"Label distribution:\n{df['label'].value_counts()}\n")
+            f.write(f"Average text length: {df['text'].str.len().mean():.2f}\n")
+            f.write(f"Images available: {df['has_image'].sum()} ({df['has_image'].sum()/len(df)*100:.2f}%)\n")
+            
+            if 'metadata' in df.columns:
+                f.write("\nMetadata Statistics:\n")
+                sources = df['metadata'].apply(lambda x: x.get('source', '')).unique()
+                f.write(f"Number of unique sources: {len(sources)}\n")
+                
+                authors = set()
+                for authors_list in df['metadata'].apply(lambda x: x.get('authors', [])):
+                    authors.update(authors_list)
+                f.write(f"Number of unique authors: {len(authors)}\n")
+        
+        print(f"Saved {dataset_name} statistics to {stats_path}")
+
+    def load_fakeddit(self) -> pd.DataFrame:
+        """Load and process Fakeddit dataset"""
+        data = []
+        for file_path in self.config['data']['fakeddit']['files']:
+            if not os.path.exists(file_path):
+                print(f"Warning: File not found: {file_path}")
+                continue
+
             try:
-                if os.path.exists(file_path):
-                    # Load TSV file
-                    df = pd.read_csv(file_path, sep='\t')
-                    
-                    # Check for required columns
-                    required_columns = [
-                        'id',
-                        'title',
-                        'clean_title',
-                        'image_url',
-                        '2_way_label',
-                        'author',
-                        'subreddit',
-                        'domain',
-                        'score',
-                        'upvote_ratio',
-                        'num_comments'
-                    ]
-                    
-                    missing_columns = [col for col in required_columns if col not in df.columns]
-                    if missing_columns:
-                        print(f"Warning: Missing required columns in {file_path}: {missing_columns}")
+                # Read TSV file with explicit column names
+                df = pd.read_csv(file_path, sep='\t', encoding='utf-8')
+                
+                # Print column names for debugging
+                print(f"\nColumns in {os.path.basename(file_path)}:")
+                print(df.columns.tolist())
+                
+                # Print first few rows for debugging
+                print(f"\nFirst few rows of {os.path.basename(file_path)}:")
+                print(df.head())
+                
+                for _, row in df.iterrows():
+                    try:
+                        article_id = str(row['id'])
+                        image_paths = get_image_paths(article_id, 'fakeddit', self.config['data']['images_dir'])
+                        
+                        # Create standardized data entry with error handling
+                        entry = {
+                            'id': article_id,
+                            'text': str(row.get('title', '')) + ' ' + str(row.get('selftext', '')),
+                            'clean_text': self._preprocess_text(str(row.get('title', '')) + ' ' + str(row.get('selftext', ''))),
+                            'image_paths': image_paths,
+                            'label': 1 if row.get('2_way_label') == 1 else 0,  # Convert to binary classification
+                            'metadata': standardize_metadata({
+                                'subreddit': row.get('subreddit', ''),
+                                'score': row.get('score', 0),
+                                'num_comments': row.get('num_comments', 0),
+                                'upvote_ratio': row.get('upvote_ratio', 0.0),
+                                'created_utc': row.get('created_utc', '')
+                            }, 'fakeddit'),
+                            'file_source': os.path.basename(file_path)
+                        }
+                        data.append(entry)
+                    except Exception as e:
+                        print(f"Error processing row in {file_path}: {e}")
                         continue
-                    
-                    # Map image paths using post IDs
-                    df['image_path'] = df['id'].apply(lambda x: os.path.join(self.images_dir, f"{x}.jpg"))
-                    
-                    # Check if images exist
-                    df['has_image'] = df['image_path'].apply(os.path.exists)
-                    print(f"Found {df['has_image'].sum()} images out of {len(df)} posts")
-                    
-                    # Standardize column names and create metadata
-                    standardized_df = pd.DataFrame({
-                        'id': df['id'],
-                        'text': df['title'],
-                        'clean_text': df['clean_title'],
-                        'image_path': df['image_path'],
-                        'label': df['2_way_label'],
-                        'metadata': df[['author', 'subreddit', 'domain', 'score', 'upvote_ratio', 'num_comments']].to_dict('records'),
-                        'dataset_source': 'fakeddit',
-                        'file_source': file_path,
-                        'has_image': df['has_image']
-                    })
-                    
-                    # Print dataset statistics
-                    print(f"\nFakeddit Dataset Statistics from {file_path}:")
-                    print(f"Total samples: {len(standardized_df)}")
-                    print(f"Label distribution:\n{standardized_df['label'].value_counts()}")
-                    print(f"Average text length: {standardized_df['text'].str.len().mean():.2f}")
-                    print(f"Images available: {standardized_df['has_image'].sum()} ({standardized_df['has_image'].sum()/len(standardized_df)*100:.2f}%)")
-                    
-                    # Print metadata statistics
-                    print("\nMetadata Statistics:")
-                    print(f"Number of unique authors: {len(df['author'].unique())}")
-                    print(f"Number of unique subreddits: {len(df['subreddit'].unique())}")
-                    print(f"Number of unique domains: {len(df['domain'].unique())}")
-                    print(f"Average score: {df['score'].mean():.2f}")
-                    print(f"Average upvote ratio: {df['upvote_ratio'].mean():.2f}")
-                    print(f"Average number of comments: {df['num_comments'].mean():.2f}")
-                    
-                    all_data.append(standardized_df)
-                    print(f"\nLoaded {len(standardized_df)} records from {file_path}")
-                else:
-                    print(f"Warning: File not found: {file_path}")
+                        
             except Exception as e:
-                print(f"Error loading Fakeddit dataset file {file_path}: {e}")
-        
-        if all_data:
-            combined_df = pd.concat(all_data, ignore_index=True)
-            
-            # Print combined dataset statistics
-            print("\nCombined Fakeddit Dataset Statistics:")
-            print(f"Total samples: {len(combined_df)}")
-            print(f"Label distribution:\n{combined_df['label'].value_counts()}")
-            print(f"Images available: {combined_df['has_image'].sum()} ({combined_df['has_image'].sum()/len(combined_df)*100:.2f}%)")
-            
-            return combined_df
-        else:
-            print("No valid Fakeddit data files found.")
+                print(f"Error loading file {file_path}: {e}")
+                continue
+
+        if not data:
+            print("No valid Fakeddit data found")
             return pd.DataFrame()
             
-    def load_fakenewnet(self):
-        """Load and standardize FakeNewNet dataset files"""
-        fakenewnet_config = self.config['data']['fakenewnet']
-        base_dir = fakenewnet_config['base_dir']
-        sources = fakenewnet_config['sources']
-        labels = fakenewnet_config['labels']
+        # Create standardized DataFrame
+        df = create_standardized_df(data, 'fakeddit')
         
-        all_data = []
+        # Print dataset statistics
+        stats = validate_dataset(df, 'fakeddit')
+        print("\nFakeddit Dataset Statistics:")
+        print(f"Total samples: {stats['total_samples']}")
+        print(f"Label distribution: {stats['label_distribution']}")
+        print(f"Text length - Mean: {stats['text_length_stats']['mean']:.2f}, "
+              f"Min: {stats['text_length_stats']['min']}, "
+              f"Max: {stats['text_length_stats']['max']}")
+        print(f"Images available: {stats['image_stats']['total_with_images']} "
+              f"({stats['image_stats']['percentage_with_images']:.2f}%)")
         
-        for source in sources:
-            for label in labels:
-                source_dir = os.path.join(base_dir, source, label)
+        return df
+
+    def load_fakenewnet(self) -> pd.DataFrame:
+        """Load and process FakeNewNet dataset"""
+        data = []
+        base_dir = self.config['data']['fakenewnet']['base_dir']
+        
+        # Validate base directory exists
+        if not os.path.exists(base_dir):
+            print(f"Error: Base directory not found: {base_dir}")
+            return pd.DataFrame()
+            
+        # Process each source (gossipcop and politifact)
+        for source in self.config['data']['fakenewnet']['sources']:
+            source_dir = os.path.join(base_dir, source)
+            if not os.path.exists(source_dir):
+                print(f"Warning: Source directory not found: {source_dir}")
+                continue
                 
-                if not os.path.exists(source_dir):
-                    print(f"Warning: Directory not found: {source_dir}")
+            # Process each label (fake and real)
+            for label in self.config['data']['fakenewnet']['labels']:
+                label_dir = os.path.join(source_dir, label)
+                if not os.path.exists(label_dir):
+                    print(f"Warning: Label directory not found: {label_dir}")
                     continue
-                
+                    
                 # Get all article directories
-                article_dirs = [d for d in os.listdir(source_dir) if os.path.isdir(os.path.join(source_dir, d))]
-                print(f"Processing {source}_{label}: {len(article_dirs)} articles")
+                article_dirs = [d for d in os.listdir(label_dir) 
+                              if d.startswith(f"{source}-id") and 
+                              os.path.isdir(os.path.join(label_dir, d))]
                 
-                for article_dir in tqdm(article_dirs, desc=f"Processing {source}_{label}"):
+                print(f"Processing {source}/{label}: {len(article_dirs)} articles")
+                
+                # Process each article
+                for article_dir in article_dirs:
                     try:
-                        # Load news content JSON
-                        json_path = os.path.join(source_dir, article_dir, "news content.json")
+                        # Construct path to news content JSON
+                        json_path = os.path.join(label_dir, article_dir, "news content.json")
                         if not os.path.exists(json_path):
+                            print(f"Warning: JSON file not found: {json_path}")
                             continue
                             
+                        # Load article data
                         with open(json_path, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
+                            article = json.load(f)
+                            
+                        # Extract article ID
+                        article_id = article_dir.split('-id')[1]
                         
-                        # Extract article ID from directory name
-                        article_id = article_dir.split('-')[-1]
+                        # Get image paths
+                        image_paths = get_image_paths(article_id, 'fakenewnet', self.config['data']['images_dir'])
                         
-                        # Create standardized data
-                        standardized_data = {
+                        # Create standardized data entry
+                        data.append({
                             'id': f"{source}_{article_id}",
-                            'text': data.get('text', ''),
-                            'clean_text': data.get('title', ''),
-                            'image_paths': [],  # Will be populated after downloading
+                            'text': article.get('text', ''),
+                            'clean_text': self._preprocess_text(article.get('text', '')),
+                            'image_paths': image_paths,
                             'label': 1 if label == 'fake' else 0,
-                            'metadata': {
-                                'source': source,
-                                'publish_date': data.get('publish_date'),
-                                'authors': data.get('authors', []),
-                                'keywords': data.get('keywords', []),
-                                'canonical_link': data.get('canonical_link', ''),
-                                'summary': data.get('summary', ''),
-                                'url': data.get('url', '')
-                            },
-                            'dataset_source': 'fakenewnet',
-                            'file_source': f"{source}_{label}",
-                            'has_image': False
-                        }
-                        
-                        # Map image paths
-                        image_paths = []
-                        
-                        # Add top image if available
-                        if data.get('top_img'):
-                            top_img_path = os.path.join(self.images_dir, f"{standardized_data['id']}_top.jpg")
-                            if os.path.exists(top_img_path):
-                                image_paths.append(top_img_path)
-                        
-                        # Add all images from the images list
-                        for i, _ in enumerate(data.get('images', [])):
-                            img_path = os.path.join(self.images_dir, f"{standardized_data['id']}_{i}.jpg")
-                            if os.path.exists(img_path):
-                                image_paths.append(img_path)
-                        
-                        standardized_data['image_paths'] = image_paths
-                        standardized_data['has_image'] = len(image_paths) > 0
-                        
-                        all_data.append(pd.DataFrame([standardized_data]))
+                            'metadata': standardize_metadata(article, 'fakenewnet'),
+                            'file_source': f"{source}/{label}/{article_dir}"
+                        })
                         
                     except Exception as e:
-                        print(f"Error processing {json_path}: {e}")
-                
-                if all_data:
-                    print(f"\nFakeNewNet Dataset Statistics for {source}_{label}:")
-                    current_df = pd.concat(all_data[-len(article_dirs):], ignore_index=True)
-                    print(f"Total samples: {len(current_df)}")
-                    print(f"Label distribution:\n{current_df['label'].value_counts()}")
-                    print(f"Average text length: {current_df['text'].str.len().mean():.2f}")
-                    print(f"Images available: {current_df['has_image'].sum()} ({current_df['has_image'].sum()/len(current_df)*100:.2f}%)")
-                    
-                    # Print metadata statistics
-                    print("\nMetadata Statistics:")
-                    print(f"Number of unique sources: {len(current_df['metadata'].apply(lambda x: x['source']).unique())}")
-                    print(f"Number of unique authors: {len(set(author for authors in current_df['metadata'].apply(lambda x: x['authors']) for author in authors))}")
-        
-        if all_data:
-            combined_df = pd.concat(all_data, ignore_index=True)
-            
-            # Print combined dataset statistics
-            print("\nCombined FakeNewNet Dataset Statistics:")
-            print(f"Total samples: {len(combined_df)}")
-            print(f"Label distribution:\n{combined_df['label'].value_counts()}")
-            print(f"Images available: {combined_df['has_image'].sum()} ({combined_df['has_image'].sum()/len(combined_df)*100:.2f}%)")
-            
-            return combined_df
-        else:
-            print("No valid FakeNewNet data files found.")
+                        print(f"Error processing article {article_dir}: {e}")
+                        continue
+                        
+        if not data:
+            print("No valid FakeNewNet data found")
             return pd.DataFrame()
-    
+            
+        # Create standardized DataFrame
+        df = create_standardized_df(data, 'fakenewnet')
+        
+        # Validate dataset and print statistics
+        stats = validate_dataset(df, 'fakenewnet')
+        print("\nFakeNewNet Dataset Statistics:")
+        print(f"Total samples: {stats['total_samples']}")
+        print(f"Label distribution: {stats['label_distribution']}")
+        print(f"Text length - Mean: {stats['text_length_stats']['mean']:.2f}, "
+              f"Min: {stats['text_length_stats']['min']}, "
+              f"Max: {stats['text_length_stats']['max']}")
+        print(f"Images available: {stats['image_stats']['total_with_images']} "
+              f"({stats['image_stats']['percentage_with_images']:.2f}%)")
+        
+        # Print metadata statistics
+        print("\nMetadata Statistics:")
+        for field, field_stats in stats['metadata_stats'].items():
+            if isinstance(field_stats, dict):
+                if 'unique_values' in field_stats:
+                    print(f"{field}: {field_stats['unique_values']} unique values, "
+                          f"{field_stats['null_count']} null values")
+                else:
+                    print(f"{field}: Mean={field_stats['mean']:.2f}, "
+                          f"Min={field_stats['min']}, Max={field_stats['max']}")
+        
+        return df
+
+    def _preprocess_text(self, text: str) -> str:
+        """Preprocess text according to configuration"""
+        # Implement text preprocessing based on config
+        return text
+
     def _download_image(self, url, filename):
         """Download image from URL and save to disk"""
         try:
@@ -579,4 +613,49 @@ class DatasetProcessor:
         print(f"Training set size: {len(train_df)} samples")
         print(f"Cross-dataset validation set size: {len(val_df)} samples")
         
-        return train_df, val_df 
+        return train_df, val_df
+
+    def move_raw_data(self, source_dir, target_dir):
+        """
+        Move raw data from source directory to target directory
+        
+        Args:
+            source_dir (str): Source directory path
+            target_dir (str): Target directory path
+        """
+        if not os.path.exists(source_dir):
+            print(f"Source directory does not exist: {source_dir}")
+            return False
+            
+        # Create target directory if it doesn't exist
+        os.makedirs(target_dir, exist_ok=True)
+        
+        try:
+            # Get list of items in source directory
+            items = os.listdir(source_dir)
+            
+            for item in items:
+                source_item = os.path.join(source_dir, item)
+                target_item = os.path.join(target_dir, item)
+                
+                # Skip if item already exists in target
+                if os.path.exists(target_item):
+                    print(f"Item already exists in target: {target_item}")
+                    continue
+                
+                # Move directory or file
+                if os.path.isdir(source_item):
+                    print(f"Moving directory: {source_item} -> {target_item}")
+                    shutil.copytree(source_item, target_item)
+                    shutil.rmtree(source_item)
+                else:
+                    print(f"Moving file: {source_item} -> {target_item}")
+                    shutil.copy2(source_item, target_item)
+                    os.remove(source_item)
+                    
+            print(f"Successfully moved data from {source_dir} to {target_dir}")
+            return True
+            
+        except Exception as e:
+            print(f"Error moving data: {e}")
+            return False 

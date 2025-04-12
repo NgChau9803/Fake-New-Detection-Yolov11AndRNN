@@ -81,16 +81,22 @@ def preprocess_text(text, max_length=100, remove_stopwords=True,
     try:
         # Handle empty or non-string inputs
         if not isinstance(text, str) or pd.isna(text):
+            print(f"Warning: Invalid text input type: {type(text)}")
             return ""
+        
+        print(f"Processing text: {text[:100]}...")
         
         # Convert to lowercase
         text = text.lower()
+        print("Converted to lowercase")
         
         # Expand contractions if enabled (e.g., "don't" -> "do not")
         if expand_contractions:
             try:
                 text = contractions.fix(text)
-            except:
+                print("Expanded contractions")
+            except Exception as e:
+                print(f"Warning: Error expanding contractions: {e}")
                 # Fall back to basic handling if contractions library fails
                 text = text.replace("n't", " not")
                 text = text.replace("'ve", " have")
@@ -99,69 +105,97 @@ def preprocess_text(text, max_length=100, remove_stopwords=True,
                 text = text.replace("'re", " are")
                 text = text.replace("'s", " is")
                 text = text.replace("'d", " would")
+                print("Used fallback contraction expansion")
         
         # Convert emoji to text
         try:
             text = emoji.demojize(text)
             text = text.replace(":", "").replace("_", " ")
-        except:
-            pass  # Continue without emoji processing if it fails
+            print("Converted emojis")
+        except Exception as e:
+            print(f"Warning: Error converting emojis: {e}")
         
         # Remove URLs
         text = re.sub(r'http\S+|www\S+|https\S+', ' URL ', text)
+        print("Removed URLs")
         
         # Remove HTML tags
         text = re.sub(r'<.*?>', '', text)
+        print("Removed HTML tags")
         
         # Replace email addresses
         text = re.sub(r'\S+@\S+', ' EMAIL ', text)
+        print("Replaced email addresses")
         
         # Replace phone numbers
         text = re.sub(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', ' PHONE ', text)
+        print("Replaced phone numbers")
         
         # Replace numbers
         text = re.sub(r'\d+', ' NUM ', text)
+        print("Replaced numbers")
         
         # Replace multiple spaces with single space
         text = re.sub(r'\s+', ' ', text)
+        print("Normalized spaces")
         
         # Remove punctuation
         text = text.translate(str.maketrans('', '', string.punctuation))
+        print("Removed punctuation")
         
-        # Tokenize
-        tokens = word_tokenize(text)
-        
-        # Convert slang and abbreviations
-        if convert_slang:
-            tokens = [slang_dict.get(token, token) for token in tokens]
-            # Retokenize after slang conversion as some slang maps to multiple words
-            tokens = [word for token in tokens for word in (word_tokenize(token) if isinstance(token, str) and ' ' in token else [token])]
-        
-        # Remove stopwords if enabled
-        if remove_stopwords:
-            tokens = [token for token in tokens if token not in stop_words]
-        
-        # Apply stemming or lemmatization
-        if use_stemming:
-            tokens = [stemmer.stem(token) for token in tokens]
-        elif use_lemmatization:
-            tokens = [lemmatizer.lemmatize(token) for token in tokens]
-        
-        # Truncate to max_length
-        if max_length > 0:
-            tokens = tokens[:max_length]
-        
-        # Join tokens back to text
-        processed_text = ' '.join(tokens)
-        
-        # Final cleanup of any remaining multiple spaces
-        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
-        
-        return processed_text
+        try:
+            # Tokenize
+            tokens = word_tokenize(text)
+            print(f"Tokenized text into {len(tokens)} tokens")
+            
+            # Convert slang and abbreviations
+            if convert_slang:
+                tokens = [slang_dict.get(token, token) for token in tokens]
+                # Retokenize after slang conversion as some slang maps to multiple words
+                tokens = [word for token in tokens for word in (word_tokenize(token) if isinstance(token, str) and ' ' in token else [token])]
+                print("Converted slang")
+            
+            # Remove stopwords if enabled
+            if remove_stopwords:
+                original_length = len(tokens)
+                tokens = [token for token in tokens if token not in stop_words]
+                print(f"Removed {original_length - len(tokens)} stopwords")
+            
+            # Apply stemming or lemmatization
+            if use_stemming:
+                tokens = [stemmer.stem(token) for token in tokens]
+                print("Applied stemming")
+            elif use_lemmatization:
+                tokens = [lemmatizer.lemmatize(token) for token in tokens]
+                print("Applied lemmatization")
+            
+            # Truncate to max_length
+            if max_length > 0:
+                original_length = len(tokens)
+                tokens = tokens[:max_length]
+                if original_length > max_length:
+                    print(f"Truncated from {original_length} to {max_length} tokens")
+            
+            # Join tokens back to text
+            processed_text = ' '.join(tokens)
+            print("Joined tokens back to text")
+            
+            # Final cleanup of any remaining multiple spaces
+            processed_text = re.sub(r'\s+', ' ', processed_text).strip()
+            print("Final cleanup complete")
+            
+            print(f"Final processed text: {processed_text[:100]}...")
+            return processed_text
+            
+        except Exception as e:
+            print(f"Error during tokenization/processing: {e}")
+            return text  # Return cleaned text without tokenization if it fails
     
     except Exception as e:
         print(f"Error preprocessing text: {e}")
-        return ""  # Return empty string on error
+        if isinstance(text, str):
+            return text  # Return original text if preprocessing fails
+        return ""  # Return empty string for non-string inputs
     
 def compute_text_features(text):
     """
