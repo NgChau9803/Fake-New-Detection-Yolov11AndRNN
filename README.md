@@ -1,6 +1,120 @@
-# Fake News Detection System
+# Fake News Detection with Multi-Modal Learning
 
-A multimodal fake news detection system using RNN for text analysis and YOLOv11 for image analysis.
+This project implements a multi-modal deep learning system for fake news detection using text, image, and metadata.
+
+## Data Processing Pipeline
+
+The data processing pipeline is designed to handle two datasets:
+
+1. **Fakeddit** - Contains news articles with text and associated images
+2. **FakeNewNet** - Contains news articles from GossipCop and PolitiFact with text and associated images
+
+### Directory Structure
+
+- The project code is in `D:\UniversityResource\Py\BDM\FinalProject`
+- Raw data and images are stored on a separate disk `E:\BDMProject`
+- Processed data is stored in the `data` directory within the project
+
+### Running the Pipeline
+
+To process the datasets, use the main script:
+
+```bash
+# Process all datasets from raw to TensorFlow datasets
+python -m src.main --all
+
+# Or run specific steps
+python -m src.main --process_datasets --combine --preprocess
+```
+
+### Pipeline Steps
+
+1. **Raw Data Processing**
+   - Load raw data from Fakeddit and FakeNewNet
+   - Standardize format across datasets
+   - Extract metadata and image paths
+
+2. **Preprocessing**
+   - Text cleaning and normalization
+   - Image preprocessing and validation
+   - Feature extraction
+
+3. **Dataset Creation**
+   - Create TensorFlow datasets for training, validation, and testing
+   - Support for balanced sampling to handle class imbalance
+   - Option for cross-dataset validation
+
+### Checking Processed Data
+
+To check and validate the processed data:
+
+```bash
+# Check all aspects of processed data
+python -m src.utils.check_data --check-all
+
+# Check specific aspects
+python -m src.utils.check_data --visualize
+python -m src.utils.check_data --check-stats
+```
+
+## Model Architecture
+
+The model follows a multi-modal architecture:
+
+1. **Input Layers**
+   - Text Input: 256-dimensional vector
+   - Image Input: 512-dimensional vector
+   - Metadata Input: 128-dimensional vector
+
+2. **Feature Extraction**
+   - Text: BiLSTM with attention
+   - Image: YOLOv11 for object detection
+   - Metadata: Embedding layers
+
+3. **Fusion Network**
+   - Cross-modal attention
+   - Adaptive feature fusion
+
+4. **Classification Head**
+   - Multi-layer perceptron
+   - Binary classification (Fake/Real)
+
+## Configuration
+
+Configuration is managed through YAML files:
+
+```bash
+# View the configuration file
+cat config/config.yaml
+```
+
+The configuration file controls:
+- Data paths and processing options
+- Model architecture parameters
+- Training hyperparameters
+
+## Requirements
+
+- Python 3.8+
+- TensorFlow 2.x
+- PyYAML
+- pandas
+- numpy
+- scikit-learn
+- NLTK
+- PIL
+
+## Citation
+
+If you use this code, please cite:
+
+```
+@article{fakenews2023,
+  title={Fake News Detection using Multi-Modal Deep Learning},
+  author={Your Name},
+  year={2023}
+}
+```
 
 ## Project Overview
 

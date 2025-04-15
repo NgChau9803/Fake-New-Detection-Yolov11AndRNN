@@ -4,7 +4,7 @@ data:
   base_dir: data
   raw_dir: E:/BDMProject/raw
   processed_dir: data/processed
-  images_dir: data/images
+  images_dir: E:/BDMProject/images
   cache_dir: data/cache
   cache_features: true
   balanced_sampling: true
@@ -12,7 +12,7 @@ data:
   vocab_size: 50000
   train_ratio: 0.7
   val_ratio: 0.15
-  
+
   # Dataset-specific configurations
   fakeddit:
     files:
@@ -37,9 +37,9 @@ data:
         normalize: true
 
   fakenewnet:
-    base_dir: E:/BDMProject/raw/FakeNewNet
+    base_dir: E:/BDMProject/raw/fakenewnet
     sources: ["gossipcop", "politifact"]
-    labels: ["real"]
+    labels: ["fake", "real"]
     label_mapping:
       fake: 1
       real: 0
@@ -65,14 +65,14 @@ model:
     embedding_dim: 300
     lstm_units: 128
     dropout_rate: 0.3
-  
+
   image:
     input_shape: [224, 224, 3]
     backbone: "resnet50"
     trainable: false
     pooling: "avg"
     dropout_rate: 0.3
-  
+
   fusion:
     hidden_units: [256, 128]
     dropout_rate: 0.3
@@ -107,4 +107,4 @@ logging:
   tensorboard: true
   save_model: true
   save_history: true
-  model_checkpoint: true 
+  model_checkpoint: true

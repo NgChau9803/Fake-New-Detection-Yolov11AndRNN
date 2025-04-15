@@ -6,41 +6,79 @@ from typing import List, Dict, Any
 def get_image_paths(article_id: str, dataset_name: str, images_dir: str) -> List[str]:
     """Get image paths for an article based on dataset type"""
     if dataset_name == 'fakeddit':
-        return [os.path.join(images_dir, f"{article_id}.jpg")]
+        # For Fakeddit, images are in public_image_set folder named by their ID
+        image_dir = os.path.join(images_dir, 'fakeddit', 'public_image_set')
+        image_path = os.path.join(image_dir, f"{article_id}.jpg")
+        
+        # Check if image exists
+        if os.path.exists(image_path):
+            return [image_path]
+            
+        # Try other extensions if jpg doesn't exist
+        for ext in ['png', 'jpeg', 'gif', 'webp']:
+            alt_path = os.path.join(image_dir, f"{article_id}.{ext}")
+            if os.path.exists(alt_path):
+                return [alt_path]
+                
+        return []
+        
     elif dataset_name == 'fakenewnet':
-        # Try both top image and numbered images
+        # Extract source from article_id (format: source_id)
+        parts = article_id.split('_')
+        if len(parts) < 2:
+            return []
+            
+        source = parts[0]  # gossipcop or politifact
+        article_id_clean = parts[1]  # numeric ID
+        
+        # Search in both real and fake directories
         paths = []
-        top_path = os.path.join(images_dir, f"{article_id}_top.jpg")
-        if os.path.exists(top_path):
-            paths.append(top_path)
-        # Check for numbered images
-        i = 0
-        while True:
-            img_path = os.path.join(images_dir, f"{article_id}_{i}.jpg")
-            if os.path.exists(img_path):
-                paths.append(img_path)
-                i += 1
-            else:
-                break
+        for label in ['real', 'fake']:
+            article_dir = os.path.join(images_dir, 'fakenewnet', source, label, f"{source}-{article_id_clean}")
+            
+            # Check if directory exists
+            if os.path.exists(article_dir):
+                # Get all image files in this directory
+                for filename in os.listdir(article_dir):
+                    file_path = os.path.join(article_dir, filename)
+                    if os.path.isfile(file_path) and _is_image_file(filename):
+                        paths.append(file_path)
+        
         return paths
+        
     return []
+
+def _is_image_file(filename: str) -> bool:
+    """Check if a file is an image based on extension"""
+    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg']
+    return any(filename.lower().endswith(ext) for ext in image_extensions)
 
 def standardize_metadata(metadata: Dict[str, Any], dataset_name: str) -> Dict[str, Any]:
     """Standardize metadata across datasets"""
     if dataset_name == 'fakeddit':
         return {
             'subreddit': metadata.get('subreddit', ''),
-            'timestamp': metadata.get('timestamp', ''),
+            'timestamp': metadata.get('created_utc', ''),
             'score': metadata.get('score', 0),
             'num_comments': metadata.get('num_comments', 0),
             'upvote_ratio': metadata.get('upvote_ratio', 0.0)
         }
     elif dataset_name == 'fakenewnet':
+        # Ensure authors is a list
+        authors = metadata.get('authors', [])
+        if not isinstance(authors, list):
+            authors = [authors] if authors else []
+            
+        # Ensure keywords is a list
+        keywords = metadata.get('keywords', [])
+        if not isinstance(keywords, list):
+            keywords = [keywords] if keywords else []
+            
         return {
             'url': metadata.get('url', ''),
             'title': metadata.get('title', ''),
-            'authors': metadata.get('authors', []),
-            'keywords': metadata.get('keywords', []),
+            'authors': authors,
+            'keywords': keywords,
             'publish_date': metadata.get('publish_date', ''),
             'source': metadata.get('source', ''),
             'summary': metadata.get('summary', '')
@@ -114,18 +152,22 @@ def validate_dataset(df: pd.DataFrame, dataset_name: str) -> Dict[str, Any]:
     
     # Add metadata statistics
     if 'metadata' in df.columns:
-        metadata_df = pd.json_normalize(df['metadata'])
-        for col in metadata_df.columns:
-            if metadata_df[col].dtype == 'object':
-                stats['metadata_stats'][col] = {
-                    'unique_values': metadata_df[col].nunique(),
-                    'null_count': metadata_df[col].isnull().sum()
-                }
-            else:
-                stats['metadata_stats'][col] = {
-                    'mean': metadata_df[col].mean(),
-                    'min': metadata_df[col].min(),
-                    'max': metadata_df[col].max()
-                }
+        # Convert metadata to DataFrame for analysis
+        try:
+            metadata_df = pd.json_normalize(df['metadata'])
+            for col in metadata_df.columns:
+                if metadata_df[col].dtype == 'object':
+                    stats['metadata_stats'][col] = {
+                        'unique_values': metadata_df[col].nunique(),
+                        'null_count': metadata_df[col].isnull().sum()
+                    }
+                else:
+                    stats['metadata_stats'][col] = {
+                        'mean': metadata_df[col].mean(),
+                        'min': metadata_df[col].min(),
+                        'max': metadata_df[col].max()
+                    }
+        except Exception as e:
+            print(f"Error analyzing metadata: {e}")
     
     return stats 

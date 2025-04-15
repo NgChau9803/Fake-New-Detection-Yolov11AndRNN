@@ -8,10 +8,9 @@ import hashlib
 import shutil
 from tqdm import tqdm
 from sklearn.utils import resample
-from src.data.image_utils import download_image, preprocess_image, augment_image
-from src.data.text_utils import preprocess_text
-import requests
-from typing import List, Dict, Any
+from src.data.image_utils import preprocess_image, augment_image
+from src.data.text_utils import preprocess_text, compute_text_features
+from typing import List, Dict, Any, Tuple
 from .dataset_utils import get_image_paths, standardize_metadata, create_standardized_df, validate_dataset
 
 class DatasetProcessor:
@@ -19,18 +18,18 @@ class DatasetProcessor:
         """Initialize dataset processor with configuration"""
         self.config = config
         self.raw_dir = config['data']['raw_dir']
-        self.processed_dir = config['data']['processed_dir']
+        self.processed_dir = os.path.join(os.getcwd(), config['data']['processed_dir'])
         self.images_dir = config['data']['images_dir']
-        self.cache_dir = config['data']['cache_dir']
+        self.cache_dir = os.path.join(os.getcwd(), config['data']['cache_dir'])
         
-        # Check if the raw_dir is an absolute path (indicating it's on a different drive)
-        self.raw_dir_is_absolute = os.path.isabs(self.raw_dir)
+        print(f"Initializing DatasetProcessor with:")
+        print(f"  Raw data dir: {self.raw_dir}")
+        print(f"  Processed dir: {self.processed_dir}")
+        print(f"  Images dir: {self.images_dir}")
+        print(f"  Cache dir: {self.cache_dir}")
         
         # Create directories if they don't exist
-        if self.raw_dir_is_absolute:
-            os.makedirs(self.raw_dir, exist_ok=True)
         os.makedirs(self.processed_dir, exist_ok=True)
-        os.makedirs(self.images_dir, exist_ok=True)
         os.makedirs(self.cache_dir, exist_ok=True)
         
         # Set up caching configuration
@@ -83,7 +82,8 @@ class DatasetProcessor:
                 
                 authors = set()
                 for authors_list in df['metadata'].apply(lambda x: x.get('authors', [])):
-                    authors.update(authors_list)
+                    if isinstance(authors_list, list):
+                        authors.update(authors_list)
                 f.write(f"Number of unique authors: {len(authors)}\n")
         
         print(f"Saved {dataset_name} statistics to {stats_path}")
@@ -104,20 +104,22 @@ class DatasetProcessor:
                 print(f"\nColumns in {os.path.basename(file_path)}:")
                 print(df.columns.tolist())
                 
-                # Print first few rows for debugging
-                print(f"\nFirst few rows of {os.path.basename(file_path)}:")
-                print(df.head())
-                
                 for _, row in df.iterrows():
                     try:
                         article_id = str(row['id'])
-                        image_paths = get_image_paths(article_id, 'fakeddit', self.config['data']['images_dir'])
+                        # Get image paths based on the article ID
+                        image_paths = get_image_paths(article_id, 'fakeddit', self.images_dir)
+                        
+                        # Create title + selftext combination (if available)
+                        title = str(row.get('clean_title', row.get('title', '')))
+                        selftext = str(row.get('selftext', ''))
+                        text = title + ' ' + selftext if selftext.strip() else title
                         
                         # Create standardized data entry with error handling
                         entry = {
                             'id': article_id,
-                            'text': str(row.get('title', '')) + ' ' + str(row.get('selftext', '')),
-                            'clean_text': self._preprocess_text(str(row.get('title', '')) + ' ' + str(row.get('selftext', ''))),
+                            'text': text,
+                            'clean_text': text,  # Will be preprocessed later
                             'image_paths': image_paths,
                             'label': 1 if row.get('2_way_label') == 1 else 0,  # Convert to binary classification
                             'metadata': standardize_metadata({
@@ -184,8 +186,7 @@ class DatasetProcessor:
                     
                 # Get all article directories
                 article_dirs = [d for d in os.listdir(label_dir) 
-                              if d.startswith(f"{source}-id") and 
-                              os.path.isdir(os.path.join(label_dir, d))]
+                              if os.path.isdir(os.path.join(label_dir, d))]
                 
                 print(f"Processing {source}/{label}: {len(article_dirs)} articles")
                 
@@ -203,19 +204,32 @@ class DatasetProcessor:
                             article = json.load(f)
                             
                         # Extract article ID
-                        article_id = article_dir.split('-id')[1]
+                        article_id = article_dir.split('-')[-1] if '-' in article_dir else article_dir
                         
-                        # Get image paths
-                        image_paths = get_image_paths(article_id, 'fakenewnet', self.config['data']['images_dir'])
+                        # Get image paths for this article
+                        image_paths = get_image_paths(f"{source}_{article_id}", 'fakenewnet', self.images_dir)
+                        
+                        # Combine title and text for full text
+                        title = article.get('title', '')
+                        text = article.get('text', '')
+                        full_text = f"{title} {text}" if title else text
                         
                         # Create standardized data entry
                         data.append({
                             'id': f"{source}_{article_id}",
-                            'text': article.get('text', ''),
-                            'clean_text': self._preprocess_text(article.get('text', '')),
+                            'text': full_text,
+                            'clean_text': full_text,  # Will be preprocessed later
                             'image_paths': image_paths,
                             'label': 1 if label == 'fake' else 0,
-                            'metadata': standardize_metadata(article, 'fakenewnet'),
+                            'metadata': standardize_metadata({
+                                'url': article.get('url', ''),
+                                'title': article.get('title', ''),
+                                'authors': article.get('authors', []),
+                                'keywords': article.get('keywords', []),
+                                'publish_date': article.get('publish_date', ''),
+                                'source': article.get('source', ''),
+                                'summary': article.get('summary', '')
+                            }, 'fakenewnet'),
                             'file_source': f"{source}/{label}/{article_dir}"
                         })
                         
@@ -241,68 +255,145 @@ class DatasetProcessor:
         print(f"Images available: {stats['image_stats']['total_with_images']} "
               f"({stats['image_stats']['percentage_with_images']:.2f}%)")
         
-        # Print metadata statistics
-        print("\nMetadata Statistics:")
-        for field, field_stats in stats['metadata_stats'].items():
-            if isinstance(field_stats, dict):
-                if 'unique_values' in field_stats:
-                    print(f"{field}: {field_stats['unique_values']} unique values, "
-                          f"{field_stats['null_count']} null values")
-                else:
-                    print(f"{field}: Mean={field_stats['mean']:.2f}, "
-                          f"Min={field_stats['min']}, Max={field_stats['max']}")
-        
         return df
 
-    def _preprocess_text(self, text: str) -> str:
-        """Preprocess text according to configuration"""
-        # Implement text preprocessing based on config
-        return text
-
-    def _download_image(self, url, filename):
-        """Download image from URL and save to disk"""
-        try:
-            # Create full path
-            image_path = os.path.join(self.images_dir, filename)
-            
-            # Skip if image already exists
-            if os.path.exists(image_path):
-                return image_path
-            
-            # Download image
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-            
-            # Save image
-            with open(image_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            return image_path
-        except Exception as e:
-            print(f"Error downloading image from {url}: {e}")
+    def preprocess_dataset(self, df=None):
+        """Preprocess the combined dataset for training"""
+        if df is None:
+            # Load from saved file if not provided
+            combined_path = os.path.join(self.processed_dir, 'combined_processed.csv')
+            if os.path.exists(combined_path):
+                df = pd.read_csv(combined_path)
+            else:
+                df = self.combine_datasets()
+        
+        # Apply balanced sampling if enabled
+        df = self.apply_balanced_sampling(df)
+        
+        # Process text data
+        print("Processing text data...")
+        df['processed_text'] = df['clean_text'].apply(
+            lambda x: preprocess_text(
+                x,
+                max_length=self.config['data']['max_text_length'],
+                remove_stopwords=True,
+                use_lemmatization=True,
+                use_stemming=False,
+                expand_contractions=True,
+                convert_slang=True
+            )
+        )
+        
+        # Extract text features for the model
+        print("Extracting text features...")
+        df['text_features'] = df['processed_text'].apply(compute_text_features)
+        
+        # Process image data
+        print("Processing image data...")
+        def process_image(row):
+            image_paths = row['image_paths']
+            if not image_paths:
+                return None
+                
+            # Try each image path until we find a valid one
+            for img_path in image_paths:
+                if os.path.exists(img_path):
+                    try:
+                        # Return the first valid image path
+                        # The actual preprocessing will be done during training
+                        return img_path
+                    except Exception as e:
+                        print(f"Error processing image {img_path}: {e}")
+                        continue
             return None
+        
+        df['processed_image_path'] = df.apply(process_image, axis=1)
+        
+        # Create a sample of preprocessed images to validate the process
+        print("Creating sample preprocessed images...")
+        sample_images_dir = os.path.join(self.processed_dir, 'sample_images')
+        os.makedirs(sample_images_dir, exist_ok=True)
+        
+        # Process a small sample of images to verify preprocessing
+        sample_size = min(10, len(df[df['processed_image_path'].notna()]))
+        sample_df = df[df['processed_image_path'].notna()].sample(sample_size)
+        
+        for _, row in sample_df.iterrows():
+            try:
+                img_path = row['processed_image_path']
+                if img_path and os.path.exists(img_path):
+                    # Preprocess image with configuration
+                    img_array = preprocess_image(
+                        img_path,
+                        target_size=self.config['model']['image']['input_shape'][:2]
+                    )
+                    
+                    # Save preprocessed image as numpy array
+                    sample_path = os.path.join(sample_images_dir, f"{row['id']}_preprocessed.npy")
+                    np.save(sample_path, img_array)
+                    
+                    # Apply augmentation (if enabled) and save
+                    if self.config['data'].get('augment_images', False):
+                        aug_config = {
+                            'flip': True,
+                            'rotation': 0.1,
+                            'zoom': 0.1,
+                            'contrast': 0.1,
+                            'brightness': 0.1
+                        }
+                        aug_img = augment_image(img_array, aug_config)
+                        aug_path = os.path.join(sample_images_dir, f"{row['id']}_augmented.npy")
+                        np.save(aug_path, aug_img)
+            except Exception as e:
+                print(f"Error saving sample image for ID {row['id']}: {e}")
+        
+        # Save preprocessed dataset
+        preprocessed_path = os.path.join(self.processed_dir, 'preprocessed_dataset.csv')
+        df.to_csv(preprocessed_path, index=False)
+        
+        # Print statistics
+        print(f"Preprocessed dataset size: {len(df)} records")
+        print(f"Records with valid text: {df['processed_text'].notna().sum()} ({df['processed_text'].notna().sum()/len(df)*100:.2f}%)")
+        print(f"Records with valid images: {df['processed_image_path'].notna().sum()} ({df['processed_image_path'].notna().sum()/len(df)*100:.2f}%)")
+        
+        return df
     
     def combine_datasets(self):
         """Combine standardized datasets"""
-        fakeddit_df = self.load_fakeddit()
-        fakenewnet_df = self.load_fakenewnet()
+        fakeddit_path = os.path.join(self.processed_dir, 'fakeddit_processed.csv')
+        fakenewnet_path = os.path.join(self.processed_dir, 'fakenewnet_processed.csv')
         
+        dfs_to_combine = []
+        
+        # Load Fakeddit data if available
+        if os.path.exists(fakeddit_path):
+            fakeddit_df = pd.read_csv(fakeddit_path)
+            if not fakeddit_df.empty:
+                dfs_to_combine.append(fakeddit_df)
+        else:
+            fakeddit_df = self.load_fakeddit()
+            if not fakeddit_df.empty:
+                dfs_to_combine.append(fakeddit_df)
+                
+        # Load FakeNewNet data if available        
+        if os.path.exists(fakenewnet_path):
+            fakenewnet_df = pd.read_csv(fakenewnet_path)
+            if not fakenewnet_df.empty:
+                dfs_to_combine.append(fakenewnet_df)
+        else:
+            fakenewnet_df = self.load_fakenewnet()
+            if not fakenewnet_df.empty:
+                dfs_to_combine.append(fakenewnet_df)
+            
         # Check if datasets are empty
-        if fakeddit_df.empty and fakenewnet_df.empty:
+        if not dfs_to_combine:
             raise ValueError("No valid data files found. Please check file paths and formats.")
             
         # Combine datasets
-        dfs_to_combine = []
-        if not fakeddit_df.empty:
-            dfs_to_combine.append(fakeddit_df)
-        if not fakenewnet_df.empty:
-            dfs_to_combine.append(fakenewnet_df)
-            
         combined_df = pd.concat(dfs_to_combine, ignore_index=True)
         
         # Save combined dataset
-        combined_path = os.path.join(self.processed_dir, 'combined_dataset.csv')
+        combined_path = os.path.join(self.processed_dir, 'combined_processed.csv')
         combined_df.to_csv(combined_path, index=False)
         
         print(f"Combined dataset created with {len(combined_df)} records")
@@ -357,56 +448,6 @@ class DatasetProcessor:
         
         return balanced_df
     
-    def preprocess_dataset(self, df=None):
-        """Preprocess the combined dataset for training"""
-        if df is None:
-            # Load from saved file if not provided
-            combined_path = os.path.join(self.processed_dir, 'combined_dataset.csv')
-            if os.path.exists(combined_path):
-                df = pd.read_csv(combined_path)
-            else:
-                df = self.combine_datasets()
-        
-        # Apply balanced sampling if enabled
-        df = self.apply_balanced_sampling(df)
-        
-        # Process text data
-        print("Processing text data...")
-        df['processed_text'] = df['clean_text'].apply(lambda x: preprocess_text(x, 
-                                                     max_length=self.config['data']['max_text_length']))
-        
-        # Process image data
-        print("Processing image data...")
-        def process_image_url(row):
-            image_id = row['id']
-            image_url = row['image_path']
-            image_path = os.path.join(self.images_dir, f"{image_id}.jpg")
-            
-            if not pd.isna(image_url) and isinstance(image_url, str) and image_url.strip():
-                if not os.path.exists(image_path):
-                    try:
-                        success = download_image(image_url, image_path)
-                        if not success:
-                            return None
-                    except Exception as e:
-                        print(f"Error downloading image for ID {image_id}: {e}")
-                        return None
-                return image_path
-            return None
-        
-        df['image_path'] = df.apply(process_image_url, axis=1)
-        
-        # Save preprocessed dataset
-        preprocessed_path = os.path.join(self.processed_dir, 'preprocessed_dataset.csv')
-        df.to_csv(preprocessed_path, index=False)
-        
-        # Print statistics
-        print(f"Preprocessed dataset size: {len(df)} records")
-        print(f"Records with valid text: {df['processed_text'].notna().sum()} ({df['processed_text'].notna().sum()/len(df)*100:.2f}%)")
-        print(f"Records with valid images: {df['image_path'].notna().sum()} ({df['image_path'].notna().sum()/len(df)*100:.2f}%)")
-        
-        return df
-    
     def _get_cache_path(self, dataset_hash):
         """Generate a cache file path based on dataset hash"""
         return os.path.join(self.cache_dir, f"features_{dataset_hash}.pkl")
@@ -414,7 +455,7 @@ class DatasetProcessor:
     def _compute_dataset_hash(self, df):
         """Compute a hash of the dataset for caching purposes"""
         # Use a subset of columns to compute the hash
-        hash_columns = ['id', 'processed_text', 'image_path', 'label']
+        hash_columns = ['id', 'processed_text', 'processed_image_path', 'label']
         hash_df = df[hash_columns].copy()
         
         # Convert to string and hash
@@ -465,12 +506,14 @@ class DatasetProcessor:
                 
                 # Image features - load and preprocess image if available
                 image_features = np.zeros(self.config['model']['image']['input_shape'])
-                if pd.notna(row['image_path']) and os.path.exists(str(row['image_path'])):
+                if pd.notna(row['processed_image_path']) and os.path.exists(str(row['processed_image_path'])):
                     try:
-                        image_features = preprocess_image(row['image_path'], 
-                                                        target_size=self.config['model']['image']['input_shape'][:2])
+                        image_features = preprocess_image(
+                            row['processed_image_path'],
+                            target_size=self.config['model']['image']['input_shape'][:2]
+                        )
                     except Exception as e:
-                        print(f"Error preprocessing image {row['image_path']}: {e}")
+                        print(f"Error preprocessing image {row['processed_image_path']}: {e}")
                 
                 # Metadata features - extract key metadata and convert to numerical format
                 metadata_features = np.zeros(10)  # Fixed size for metadata features
@@ -614,48 +657,3 @@ class DatasetProcessor:
         print(f"Cross-dataset validation set size: {len(val_df)} samples")
         
         return train_df, val_df
-
-    def move_raw_data(self, source_dir, target_dir):
-        """
-        Move raw data from source directory to target directory
-        
-        Args:
-            source_dir (str): Source directory path
-            target_dir (str): Target directory path
-        """
-        if not os.path.exists(source_dir):
-            print(f"Source directory does not exist: {source_dir}")
-            return False
-            
-        # Create target directory if it doesn't exist
-        os.makedirs(target_dir, exist_ok=True)
-        
-        try:
-            # Get list of items in source directory
-            items = os.listdir(source_dir)
-            
-            for item in items:
-                source_item = os.path.join(source_dir, item)
-                target_item = os.path.join(target_dir, item)
-                
-                # Skip if item already exists in target
-                if os.path.exists(target_item):
-                    print(f"Item already exists in target: {target_item}")
-                    continue
-                
-                # Move directory or file
-                if os.path.isdir(source_item):
-                    print(f"Moving directory: {source_item} -> {target_item}")
-                    shutil.copytree(source_item, target_item)
-                    shutil.rmtree(source_item)
-                else:
-                    print(f"Moving file: {source_item} -> {target_item}")
-                    shutil.copy2(source_item, target_item)
-                    os.remove(source_item)
-                    
-            print(f"Successfully moved data from {source_dir} to {target_dir}")
-            return True
-            
-        except Exception as e:
-            print(f"Error moving data: {e}")
-            return False 
