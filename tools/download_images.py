@@ -105,8 +105,8 @@ def download_fakeddit_images(dataset_path, output_dir, dataset_type, num_workers
     logging.info(f"Downloaded {success_count} out of {len(remaining_images)} remaining images")
     logging.info(f"Images saved to: {fakeddit_dir}")
 
-def download_fakenewnet_images(json_path, output_dir, num_workers=4):
-    """Download images from a FakeNewNet article JSON file"""
+def download_fakenewsnet_images(json_path, output_dir, num_workers=4):
+    """Download images from a FakeNewsNet article JSON file"""
     try:
         # Read the JSON file
         with open(json_path, 'r', encoding='utf-8') as f:
@@ -121,8 +121,8 @@ def download_fakenewnet_images(json_path, output_dir, num_workers=4):
         source = path_parts[-3]  # e.g., 'gossipcop' or 'politifact'
         label = path_parts[-2]   # e.g., 'fake' or 'real'
         
-        # Create output directory structure: fakenewnet/source/label/article_id
-        article_output_dir = os.path.join(output_dir, 'fakenewnet', source, label, article_id)
+        # Create output directory structure: fakenewsnet/source/label/article_id
+        article_output_dir = os.path.join(output_dir, 'fakenewsnet', source, label, article_id)
         os.makedirs(article_output_dir, exist_ok=True)
         
         logging.info(f"Processing article {article_id} from {source}/{label}")
@@ -188,12 +188,12 @@ def download_fakenewnet_images(json_path, output_dir, num_workers=4):
         logging.error(f"Error processing article {json_path}: {str(e)}")
         raise  # Re-raise the exception to handle it in the calling function
 
-def load_fakenewnet(base_dir, output_dir, num_workers=4):
-    """Load and process FakeNewNet dataset"""
-    logging.info(f"Processing FakeNewNet dataset from {base_dir}")
+def load_fakenewsnet(base_dir, output_dir, num_workers=4):
+    """Load and process FakeNewsNet dataset"""
+    logging.info(f"Processing FakeNewsNet dataset from {base_dir}")
     
     # Create tracking file path
-    tracking_dir = os.path.join(output_dir, 'fakenewnet', '.tracking')
+    tracking_dir = os.path.join(output_dir, 'fakenewsnet', '.tracking')
     os.makedirs(tracking_dir, exist_ok=True)
     tracking_file = os.path.join(tracking_dir, 'processed_articles.txt')
     
@@ -240,7 +240,7 @@ def load_fakenewnet(base_dir, output_dir, num_workers=4):
             article_dir = os.path.basename(os.path.dirname(json_path))
             
             # Download images for this article
-            download_fakenewnet_images(json_path, output_dir, num_workers)
+            download_fakenewsnet_images(json_path, output_dir, num_workers)
             
             # Mark article as processed
             with open(tracking_file, 'a') as f:
@@ -254,7 +254,7 @@ def load_fakenewnet(base_dir, output_dir, num_workers=4):
 def main():
     parser = argparse.ArgumentParser(description='Download images from datasets')
     parser.add_argument('--config', type=str, default='config/config.yaml', help='Path to configuration file')
-    parser.add_argument('--dataset', type=str, choices=['fakeddit', 'fakenewnet'], required=True, help='Dataset to download images from')
+    parser.add_argument('--dataset', type=str, choices=['fakeddit', 'fakenewsnet'], required=True, help='Dataset to download images from')
     parser.add_argument('--type', type=str, choices=['train', 'validate', 'test'], help='Dataset type for Fakeddit')
     parser.add_argument('--output', type=str, help='Output directory for images (overrides config)')
     parser.add_argument('--workers', type=int, default=4, help='Number of download workers')
@@ -296,25 +296,25 @@ def main():
             # Download Fakeddit images with dataset type
             download_fakeddit_images(dataset_path, base_output_dir, args.type, args.workers)
             
-        elif args.dataset == 'fakenewnet':
+        elif args.dataset == 'fakenewsnet':
             # Get base directory from config
-            base_dir = config['data']['fakenewnet']['base_dir']
+            base_dir = config['data']['fakenewsnet']['base_dir']
             
             if not os.path.exists(base_dir):
                 logging.error(f"Base directory not found: {base_dir}")
                 return
                 
-            logging.info(f"Processing FakeNewNet dataset from: {base_dir}")
+            logging.info(f"Processing FakeNewsNet dataset from: {base_dir}")
             
             # Process each source (gossipcop and politifact)
-            for source in config['data']['fakenewnet']['sources']:
+            for source in config['data']['fakenewsnet']['sources']:
                 source_dir = os.path.join(base_dir, source)
                 if not os.path.exists(source_dir):
                     logging.warning(f"Source directory not found: {source_dir}")
                     continue
                     
                 # Process each label (fake and real)
-                for label in config['data']['fakenewnet']['labels']:
+                for label in config['data']['fakenewsnet']['labels']:
                     label_dir = os.path.join(source_dir, label)
                     if not os.path.exists(label_dir):
                         logging.warning(f"Label directory not found: {label_dir}")
@@ -337,7 +337,7 @@ def main():
                                 continue
                                 
                             # Download images for this article
-                            download_fakenewnet_images(json_path, base_output_dir, args.workers)
+                            download_fakenewsnet_images(json_path, base_output_dir, args.workers)
                         except Exception as e:
                             logging.error(f"Error processing article {article_dir}: {str(e)}")
     

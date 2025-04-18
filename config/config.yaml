@@ -1,110 +1,122 @@
-# Dataset Configuration
+# Multimodal Fake News Detection System Configuration
+
+# Data configuration
 data:
-  # Directory paths
   base_dir: data
-  raw_dir: E:/BDMProject/raw
+  raw_dir: data/raw
   processed_dir: data/processed
-  images_dir: E:/BDMProject/images
+  images_dir: data/images
   cache_dir: data/cache
-  cache_features: true
-  balanced_sampling: true
-  max_text_length: 512
-  vocab_size: 50000
+  
+  # Dataset settings
+  max_text_length: 128
+  max_vocab_size: 20000
+  val_split: 0.15
+  test_split: 0.15
+  random_seed: 42
   train_ratio: 0.7
   val_ratio: 0.15
-
-  # Dataset-specific configurations
+  
+  # Datasets to use
+  datasets:
+    - fakeddit
+    - fakenewsnet
+  
+  # FakeDdit specific settings
   fakeddit:
+    base_dir: data/raw/fakeddit
+    images_dir: data/images/fakeddit/public_image_set
     files:
-      - E:/BDMProject/raw/fakeddit/multimodal_train.tsv
-      - E:/BDMProject/raw/fakeddit/multimodal_test_public.tsv
-      - E:/BDMProject/raw/fakeddit/multimodal_validate.tsv
-    label_mapping:
-      real: 0
-      fake: 1
-    metadata_columns:
-      - subreddit
-      - created_utc
-      - score
-      - num_comments
-      - upvote_ratio
-    preprocessing:
-      text:
-        max_length: 512
-        min_length: 10
-      image:
-        target_size: [224, 224]
-        normalize: true
+      - data/raw/fakeddit/multimodal_train.tsv
+      - data/raw/fakeddit/multimodal_test_public.tsv
+      - data/raw/fakeddit/multimodal_validate.tsv
+  
+  # FakeNewsNet specific settings
+  fakenewsnet:
+    base_dir: data/raw/fakenewsnet
+    images_dir: data/images/fakenewsnet
+    sources: 
+      - gossipcop
+      - politifact
+    labels:
+      - fake
+      - real
+    # Path to json file in each article directory
+    news_content_file: "news content.json"
 
-  fakenewnet:
-    base_dir: E:/BDMProject/raw/fakenewnet
-    sources: ["gossipcop", "politifact"]
-    labels: ["fake", "real"]
-    label_mapping:
-      fake: 1
-      real: 0
-    metadata_columns:
-      - url
-      - title
-      - authors
-      - keywords
-      - publish_date
-      - source
-      - summary
-    preprocessing:
-      text:
-        max_length: 512
-        min_length: 10
-      image:
-        target_size: [224, 224]
-        normalize: true
-
-# Model Configuration
+# Model configuration
 model:
+  # Text model configuration
   text:
     embedding_dim: 300
     lstm_units: 128
     dropout_rate: 0.3
-
+    attention_heads: 8
+    visualize_attention: true
+  
+  # Image model configuration
   image:
     input_shape: [224, 224, 3]
-    backbone: "resnet50"
+    backbone: "yolov11"
     trainable: false
-    pooling: "avg"
-    dropout_rate: 0.3
-
+    pooling: 'avg'
+  
+  # Fusion model configuration
   fusion:
-    hidden_units: [256, 128]
+    fusion_method: "cross_attention"  # Options: cross_attention, concat, gmu, mutan, film
+    feature_dim: 256
+    hidden_units: [512, 256, 128]
     dropout_rate: 0.3
-    activation: "relu"
-    output_activation: "sigmoid"
+    transformer_layers: 2
+    attention_heads: 8
+    use_spectral_norm: true
+    use_stochastic_depth: true
+    stochastic_depth_rate: 0.1
+    l1_reg: 1e-5
+    l2_reg: 1e-4
 
-# Training Configuration
+# Training configuration
 training:
   batch_size: 32
   epochs: 50
   learning_rate: 0.001
+  optimizer: "adamw"  # Options: adam, adamw, sgd, radam
+  weight_decay: 0.01
+  scheduler: "cosine"  # Options: cosine, step, plateau
+  early_stopping: true
   early_stopping_patience: 5
-  reduce_lr_patience: 3
-  reduce_lr_factor: 0.5
-  min_lr: 0.00001
+  gradient_clip_norm: 1.0
+  gradient_accumulation_steps: 1
+  use_mixed_precision: true
 
-# Evaluation Configuration
+# Evaluation configuration
 evaluation:
   metrics:
     - accuracy
     - precision
     - recall
     - f1
-  cross_dataset_validation: true
+    - auc
+  visualize_confusion_matrix: true
+  visualize_roc_curve: true
   save_predictions: true
-  confusion_matrix: true
-  classification_report: true
 
-# Logging Configuration
-logging:
+# Explainability configuration
+explainability:
+  methods:
+    - lime
+    - shap
+  num_samples: 100
+  save_explanations: true
+  visualize_attention: true
+  visualize_saliency: true
+
+# Output configuration
+output:
+  model_dir: models
   log_dir: logs
-  tensorboard: true
-  save_model: true
-  save_history: true
-  model_checkpoint: true
+  explanation_dir: explanations
+  tensorboard_dir: logs/tensorboard
+  save_best_model: true
+  save_checkpoints: true
+  checkpoint_frequency: 5

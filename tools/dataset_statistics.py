@@ -144,7 +144,7 @@ def analyze_all_datasets(config, output_dir='data/statistics'):
     
     all_stats = {
         'fakeddit': [],
-        'fakenewnet': []
+        'fakenewsnet': []
     }
     
     # Analyze Fakeddit datasets
@@ -159,15 +159,15 @@ def analyze_all_datasets(config, output_dir='data/statistics'):
         else:
             print(f"Warning: File not found: {file_path}")
     
-    # Analyze FakeNewNet datasets
-    fakenewnet_files = config['data']['fakenewnet']['files']
-    fakenewnet_type = config['data']['fakenewnet']['file_type']
+    # Analyze FakeNewsNet datasets
+    fakenewsnet_files = config['data']['fakenewsnet']['files']
+    fakenewsnet_type = config['data']['fakenewsnet']['file_type']
     
-    for file_path in fakenewnet_files:
+    for file_path in fakenewsnet_files:
         if os.path.exists(file_path):
-            stats = analyze_dataset(file_path, fakenewnet_type, output_dir)
+            stats = analyze_dataset(file_path, fakenewsnet_type, output_dir)
             if stats:
-                all_stats['fakenewnet'].append(stats)
+                all_stats['fakenewsnet'].append(stats)
         else:
             print(f"Warning: File not found: {file_path}")
     
@@ -197,13 +197,13 @@ def analyze_all_datasets(config, output_dir='data/statistics'):
         f.write("Dataset Statistics Summary Report\n")
         f.write("===============================\n\n")
         
-        f.write(f"Total files analyzed: {len(all_stats['fakeddit']) + len(all_stats['fakenewnet'])}\n")
+        f.write(f"Total files analyzed: {len(all_stats['fakeddit']) + len(all_stats['fakenewsnet'])}\n")
         f.write(f"Total data rows: {total_rows:,}\n")
         f.write(f"Total data size: {total_data_mb:.2f} MB\n\n")
         
         # Fakeddit stats
         f.write(f"Fakeddit files: {len(all_stats['fakeddit'])}\n")
-        f.write(f"FakeNewNet files: {len(all_stats['fakenewnet'])}\n\n")
+        f.write(f"FakeNewsNet files: {len(all_stats['fakenewsnet'])}\n\n")
         
         # Label distribution summary
         f.write("Label Distribution:\n")

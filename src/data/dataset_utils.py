@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 def get_image_paths(article_id: str, dataset_name: str, images_dir: str) -> List[str]:
     """Get image paths for an article based on dataset type"""
     if dataset_name == 'fakeddit':
-        # For Fakeddit, images are in public_image_set folder named by their ID
+        # For Fakeddit, images are named by their ID in the public_image_set folder
         image_dir = os.path.join(images_dir, 'fakeddit', 'public_image_set')
         image_path = os.path.join(image_dir, f"{article_id}.jpg")
         
@@ -22,25 +22,27 @@ def get_image_paths(article_id: str, dataset_name: str, images_dir: str) -> List
                 
         return []
         
-    elif dataset_name == 'fakenewnet':
-        # Extract source from article_id (format: source_id)
+    elif dataset_name == 'fakenewsnet':
+        # Extract source and article ID from combined ID (format: source_article-id)
+        # Example: gossipcop_gossipcop-12345
         parts = article_id.split('_')
         if len(parts) < 2:
             return []
             
         source = parts[0]  # gossipcop or politifact
-        article_id_clean = parts[1]  # numeric ID
+        article_dir = parts[1]  # For example, gossipcop-12345
         
-        # Search in both real and fake directories
+        # Both label directories (real/fake) need to be checked
         paths = []
         for label in ['real', 'fake']:
-            article_dir = os.path.join(images_dir, 'fakenewnet', source, label, f"{source}-{article_id_clean}")
+            # Images for FakeNewsNet are in directories matching the dataset structure
+            article_img_dir = os.path.join(images_dir, source, label, article_dir)
             
             # Check if directory exists
-            if os.path.exists(article_dir):
+            if os.path.exists(article_img_dir):
                 # Get all image files in this directory
-                for filename in os.listdir(article_dir):
-                    file_path = os.path.join(article_dir, filename)
+                for filename in os.listdir(article_img_dir):
+                    file_path = os.path.join(article_img_dir, filename)
                     if os.path.isfile(file_path) and _is_image_file(filename):
                         paths.append(file_path)
         
@@ -58,12 +60,14 @@ def standardize_metadata(metadata: Dict[str, Any], dataset_name: str) -> Dict[st
     if dataset_name == 'fakeddit':
         return {
             'subreddit': metadata.get('subreddit', ''),
+            'author': metadata.get('author', ''),
             'timestamp': metadata.get('created_utc', ''),
             'score': metadata.get('score', 0),
             'num_comments': metadata.get('num_comments', 0),
-            'upvote_ratio': metadata.get('upvote_ratio', 0.0)
+            'upvote_ratio': metadata.get('upvote_ratio', 0.0),
+            'domain': metadata.get('domain', '')
         }
-    elif dataset_name == 'fakenewnet':
+    elif dataset_name == 'fakenewsnet':
         # Ensure authors is a list
         authors = metadata.get('authors', [])
         if not isinstance(authors, list):
@@ -81,7 +85,8 @@ def standardize_metadata(metadata: Dict[str, Any], dataset_name: str) -> Dict[st
             'keywords': keywords,
             'publish_date': metadata.get('publish_date', ''),
             'source': metadata.get('source', ''),
-            'summary': metadata.get('summary', '')
+            'summary': metadata.get('summary', ''),
+            'top_img': metadata.get('top_img', '')
         }
     return {}
 

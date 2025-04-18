@@ -1,149 +1,211 @@
 import tensorflow as tf
+from tensorflow.keras import layers
 import numpy as np
 
+class MultiHeadSelfAttention(tf.keras.layers.Layer):
+    """Multi-head self-attention mechanism"""
+    
+    def __init__(self, embed_dim, num_heads=8):
+        super(MultiHeadSelfAttention, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        
+        assert embed_dim % num_heads == 0, "Embedding dimension must be divisible by number of heads"
+        
+        self.projection_dim = embed_dim // num_heads
+        self.query_dense = layers.Dense(embed_dim)
+        self.key_dense = layers.Dense(embed_dim)
+        self.value_dense = layers.Dense(embed_dim)
+        self.combine_heads = layers.Dense(embed_dim)
+        
+        # Store attention weights for visualization if needed
+        self.attention_weights = None
+        
+    def attention(self, query, key, value):
+        score = tf.matmul(query, key, transpose_b=True)
+        
+        # Scale dot-product attention
+        dim_key = tf.cast(tf.shape(key)[-1], tf.float32)
+        scaled_score = score / tf.math.sqrt(dim_key)
+        
+        # Apply softmax to get attention weights
+        weights = tf.nn.softmax(scaled_score, axis=-1)
+        
+        # Store for visualization
+        self.attention_weights = weights
+        
+        # Apply attention weights to values
+        output = tf.matmul(weights, value)
+        
+        return output, weights
+        
+    def separate_heads(self, x, batch_size):
+        # Reshape to [batch_size, seq_length, num_heads, projection_dim]
+        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.projection_dim))
+        
+        # Transpose to [batch_size, num_heads, seq_length, projection_dim]
+        return tf.transpose(x, perm=[0, 2, 1, 3])
+        
+    def call(self, inputs):
+        batch_size = tf.shape(inputs)[0]
+        
+        # Linear projections
+        query = self.query_dense(inputs)  # (batch_size, seq_len, embed_dim)
+        key = self.key_dense(inputs)      # (batch_size, seq_len, embed_dim)
+        value = self.value_dense(inputs)  # (batch_size, seq_len, embed_dim)
+        
+        # Separate heads
+        query = self.separate_heads(query, batch_size)  # (batch_size, num_heads, seq_len, projection_dim)
+        key = self.separate_heads(key, batch_size)      # (batch_size, num_heads, seq_len, projection_dim)
+        value = self.separate_heads(value, batch_size)  # (batch_size, num_heads, seq_len, projection_dim)
+        
+        # Compute attention for each head
+        attention, weights = self.attention(query, key, value)
+        
+        # Reshape to [batch_size, seq_length, num_heads, projection_dim]
+        attention = tf.transpose(attention, perm=[0, 2, 1, 3])
+        
+        # Reshape to [batch_size, seq_length, embed_dim]
+        concat_attention = tf.reshape(attention, (batch_size, -1, self.embed_dim))
+        
+        # Final linear projection
+        output = self.combine_heads(concat_attention)
+        
+        return output
+    
+    def get_attention_weights(self):
+        return self.attention_weights
+
+
+class TransformerBlock(tf.keras.layers.Layer):
+    """Transformer block with multi-head self-attention and feed-forward layers"""
+    
+    def __init__(self, embed_dim, num_heads, ff_dim, rate=0.1):
+        super(TransformerBlock, self).__init__()
+        self.att = MultiHeadSelfAttention(embed_dim, num_heads)
+        self.ffn = tf.keras.Sequential([
+            layers.Dense(ff_dim, activation="relu"),
+            layers.Dense(embed_dim),
+        ])
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = layers.Dropout(rate)
+        self.dropout2 = layers.Dropout(rate)
+        
+    def call(self, inputs, training=False):
+        # Apply attention with residual connection and normalization
+        attn_output = self.att(inputs)
+        attn_output = self.dropout1(attn_output, training=training)
+        out1 = self.layernorm1(inputs + attn_output)
+        
+        # Apply feed-forward network with residual connection and normalization
+        ffn_output = self.ffn(out1)
+        ffn_output = self.dropout2(ffn_output, training=training)
+        return self.layernorm2(out1 + ffn_output)
+    
+    def get_attention_weights(self):
+        return self.att.get_attention_weights()
+
+
 class TextFeatureExtractor(tf.keras.Model):
-    def __init__(self, vocab_size, embedding_dim=300, rnn_units=128, dropout=0.2, attention_heads=4):
+    """Text feature extractor using BiLSTM and attention mechanisms"""
+    
+    def __init__(self, vocab_size, embedding_dim=300, rnn_units=128, 
+                 dropout=0.3, attention_heads=4, use_transformer=True):
         super(TextFeatureExtractor, self).__init__()
         
-        # Store configuration
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
         self.rnn_units = rnn_units
-        self.dropout_rate = dropout
         self.attention_heads = attention_heads
+        self.use_transformer = use_transformer
         
-        # Word embedding layer
-        self.embedding = tf.keras.layers.Embedding(
-            input_dim=vocab_size + 1,  # Add 1 for padding token (0)
+        # Embedding layer
+        self.embedding = layers.Embedding(
+            input_dim=vocab_size,
             output_dim=embedding_dim,
-            mask_zero=True,
-            name="word_embedding"
+            mask_zero=True
         )
         
-        # Positional encoding for better sequence understanding
-        self.positional_encoding = PositionalEncoding(embedding_dim)
-        
-        # Bidirectional LSTM for better context capture
-        self.bi_lstm = tf.keras.layers.Bidirectional(
-            tf.keras.layers.LSTM(rnn_units, return_sequences=True),
-            name="bidirectional_lstm"
+        # Bidirectional LSTM 
+        self.bilstm = layers.Bidirectional(
+            layers.LSTM(
+                units=rnn_units,
+                return_sequences=True,
+                return_state=True,
+                dropout=dropout,
+                recurrent_dropout=0,  # For CuDNN compatibility
+                recurrent_activation='sigmoid'
+            )
         )
         
-        # Attention mechanism to focus on important words
-        self.attention = tf.keras.layers.MultiHeadAttention(
-            num_heads=attention_heads, 
-            key_dim=rnn_units,
-            name="multi_head_attention"
+        # Transformer block if enabled
+        if use_transformer:
+            self.transformer_block = TransformerBlock(
+                embed_dim=rnn_units * 2,  # Double for bidirectional
+                num_heads=attention_heads,
+                ff_dim=rnn_units * 4,
+                rate=dropout
+            )
+        
+        # Multi-head attention
+        self.attention = MultiHeadSelfAttention(
+            embed_dim=rnn_units * 2,  # Double for bidirectional
+            num_heads=attention_heads
         )
         
-        # Layer normalization for better training stability
-        self.layer_norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.layer_norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        # Output pooling layer
+        self.global_max_pool = layers.GlobalMaxPooling1D()
+        self.global_avg_pool = layers.GlobalAveragePooling1D()
         
-        # Feed-forward network after attention
-        self.ffn = tf.keras.Sequential([
-            tf.keras.layers.Dense(rnn_units * 4, activation='relu'),
-            tf.keras.layers.Dense(rnn_units * 2)
-        ], name="feed_forward_network")
+        # Final dense layer
+        self.output_dense = layers.Dense(rnn_units * 2)
+        self.dropout = layers.Dropout(dropout)
         
-        # Global average pooling to get fixed-size representation
-        self.global_pool = tf.keras.layers.GlobalAveragePooling1D(name="global_avg_pooling")
+    def call(self, inputs, training=False):
+        # Get input mask from embedding layer
+        mask = tf.cast(tf.math.not_equal(inputs, 0), tf.float32)
+        mask = tf.expand_dims(mask, -1)
         
-        # Final output layers
-        self.dropout = tf.keras.layers.Dropout(dropout)
-        self.dense = tf.keras.layers.Dense(embedding_dim, activation='relu', name="final_dense")
-        
-        # Store attention weights for visualization
-        self.attention_weights = None
-        
-    def call(self, inputs, training=False, return_attention=False):
-        # Create mask for padding tokens (0)
-        mask = tf.cast(tf.not_equal(inputs, 0), tf.float32)
-        mask = tf.expand_dims(mask, axis=-1)
-        
-        # Get embeddings
+        # Create embeddings
         x = self.embedding(inputs)
         
-        # Apply mask to zero out padding tokens
-        x = x * mask
+        # Apply BiLSTM
+        lstm_outputs, forward_h, forward_c, backward_h, backward_c = self.bilstm(x)
         
-        # Add positional encoding
-        x = self.positional_encoding(x)
+        # Apply mask
+        lstm_outputs = lstm_outputs * mask
         
-        # Apply Bidirectional LSTM
-        lstm_output = self.bi_lstm(x)
+        # Apply transformer if enabled
+        if self.use_transformer:
+            transformed = self.transformer_block(lstm_outputs, training=training)
+            transformed = transformed * mask
+        else:
+            transformed = lstm_outputs
         
-        # Apply attention with residual connection and layer normalization
-        # Store attention weights for later visualization
-        attention_output, attention_weights = self.attention(
-            query=lstm_output, 
-            key=lstm_output, 
-            value=lstm_output,
-            return_attention_scores=True
-        )
+        # Apply attention
+        attended = self.attention(transformed)
+        attended = attended * mask
         
-        # Store attention weights for visualization
-        self.attention_weights = attention_weights
+        # Apply pooling (combining multiple feature extraction techniques)
+        max_pool = self.global_max_pool(attended)
+        avg_pool = self.global_avg_pool(attended)
         
-        # Add residual connection and normalize
-        x = self.layer_norm1(lstm_output + attention_output)
+        # Concatenate states and pooled features
+        concat_h = tf.concat([forward_h, backward_h], axis=-1)
+        concat_pooled = tf.concat([max_pool, avg_pool], axis=-1)
         
-        # Apply feed-forward network with residual connection
-        ffn_output = self.ffn(x)
-        x = self.layer_norm2(x + ffn_output)
+        # Final feature representation
+        features = self.output_dense(concat_pooled + concat_h)
+        features = self.dropout(features, training=training)
         
-        # Pool to get fixed-size representation
-        x = self.global_pool(x)
-        
-        # Apply dropout and final dense layer
-        x = self.dropout(x, training=training)
-        x = self.dense(x)
-        
-        if return_attention:
-            return x, attention_weights
-        
-        return x
+        return features
     
     def get_attention_weights(self):
         """Return attention weights for visualization"""
-        return self.attention_weights
-    
-    def get_token_importance(self, inputs, tokenizer):
-        """
-        Get token importance based on attention weights
-        
-        Args:
-            inputs: Input token IDs
-            tokenizer: Tokenizer with word index mapping
-            
-        Returns:
-            List of (token, importance_score) pairs
-        """
-        # Get predictions with attention weights
-        _, attention_weights = self.call(inputs, return_attention=True)
-        
-        # Convert token IDs to words
-        idx_to_word = {v: k for k, v in tokenizer.items()}
-        
-        # Average attention weights across heads and positions
-        # Shape: [batch_size, seq_len, seq_len, num_heads]
-        avg_weights = tf.reduce_mean(attention_weights, axis=-1)  # Average across heads
-        
-        # Get importance per token
-        token_importance = []
-        for i, token_id in enumerate(inputs[0]):  # Use first example in batch
-            if token_id == 0:  # Skip padding
-                continue
-            
-            # Get word for token ID
-            word = idx_to_word.get(token_id.numpy(), '<UNK>')
-            
-            # Get average attention for this token (based on how much other tokens attend to it)
-            importance = tf.reduce_mean(avg_weights[0, :, i]).numpy()
-            
-            token_importance.append((word, importance))
-        
-        return token_importance
+        if self.use_transformer:
+            return self.transformer_block.get_attention_weights()
+        return self.attention.get_attention_weights()
 
 
 class PositionalEncoding(tf.keras.layers.Layer):
