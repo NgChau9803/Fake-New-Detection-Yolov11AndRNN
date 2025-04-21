@@ -173,9 +173,9 @@ class ModelExplainer:
             # Generate explanation
             explanation = self.image_explainer.explain_instance(
                 image_input, 
-                predict_fn,
+                predict_fn, 
                 top_labels=2,
-                hide_color=0,
+                hide_color=0, 
                 num_samples=50
             )
             

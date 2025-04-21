@@ -112,9 +112,26 @@ class DatasetProcessor:
         self.max_text_length = config['data'].get('max_text_length', 128)
         self.max_vocab_size = config['data'].get('max_vocab_size', 20000)
         self.batch_size = config['training'].get('batch_size', 32)
+        self.train_ratio = config['data'].get('train_ratio', 0.7)
         self.val_split = config['data'].get('val_split', 0.15)
         self.test_split = config['data'].get('test_split', 0.15)
         self.random_seed = config['data'].get('random_seed', 42)
+        
+        # Text preprocessing options
+        self.text_preproc_config = config['data'].get('text_preprocessing', {
+            'remove_stopwords': True,
+            'use_lemmatization': True,
+            'use_stemming': False,
+            'expand_contractions': True,
+            'convert_slang': True
+        })
+        
+        # Image preprocessing options
+        self.image_preproc_config = config['data'].get('image_preprocessing', {
+            'normalization': 'standard',
+            'resize_method': 'bilinear',
+            'apply_clahe': False
+        })
         
         # Initialize tokenizer information
         self.word_index = None
@@ -183,95 +200,88 @@ class DatasetProcessor:
             print(f"Permission error saving {dataset_name} statistics to {stats_path}: {pe}")
             print(f"Will continue without saving {dataset_name} statistics...")
 
-    def load_fakeddit(self) -> pd.DataFrame:
-        """Load and process Fakeddit dataset"""
-        data = []
+    def load_fakeddit(self, subset: str = 'train', sample_size: int = None) -> pd.DataFrame:
+        """
+        Process Fakeddit dataset
+        subset: train, val, or test
+        """
+        output_path = os.path.join(self.processed_dir, f"fakeddit_{subset}_processed.csv")
         
-        # Check if files are specified in config
-        if 'files' not in self.config['data']['fakeddit']:
-            print("No Fakeddit files specified in config.")
-            return pd.DataFrame()
-        
-        for file_path in self.config['data']['fakeddit']['files']:
-            if not os.path.exists(file_path):
-                print(f"Warning: File not found: {file_path}")
-                continue
-
+        # Check if processed file exists
+        if os.path.exists(output_path) and not self.force_reprocess:
+            print(f"Loading processed Fakeddit {subset} dataset from {output_path}")
             try:
-                # Read TSV file with explicit column names
-                df = pd.read_csv(file_path, sep='\t', encoding='utf-8')
-                
-                # Print column names for debugging
-                print(f"\nColumns in {os.path.basename(file_path)}:")
-                print(df.columns.tolist())
-                
-                for _, row in df.iterrows():
-                    try:
-                        article_id = str(row['id'])
-                        # Get image paths based on the article ID
-                        image_paths = get_fakeddit_image_path(article_id, self.config['data']['fakeddit']['images_dir'])
-                        
-                        # Check if image exists
-                        has_image = row.get('hasImage', False)
-                        if has_image and not image_paths:
-                            # Try to get image URL and download if needed
-                            image_url = row.get('image_url', '')
-                            if image_url:
-                                print(f"Image for {article_id} not found locally but URL available: {image_url}")
-                        
-                        # Create title + selftext combination (if available)
-                        title = str(row.get('clean_title', row.get('title', '')))
-                        selftext = str(row.get('selftext', ''))
-                        text = title + ' ' + selftext if selftext.strip() else title
-                        
-                        # Create standardized data entry with error handling
-                        entry = {
-                            'id': article_id,
-                            'text': text,
-                            'clean_text': text,  # Will be preprocessed later
-                            'image_paths': image_paths,
-                            'has_image': bool(image_paths) or has_image,
-                            'label': 1 if row.get('2_way_label', 0) == 1 else 0,  # Convert to binary classification
-                            'metadata': standardize_metadata({
-                                'subreddit': row.get('subreddit', ''),
-                                'author': row.get('author', ''),
-                                'score': row.get('score', 0),
-                                'num_comments': row.get('num_comments', 0),
-                                'upvote_ratio': row.get('upvote_ratio', 0.0),
-                                'created_utc': row.get('created_utc', ''),
-                                'domain': row.get('domain', '')
-                            }, 'fakeddit'),
-                            'dataset_source': 'fakeddit',
-                            'file_source': os.path.basename(file_path)
-                        }
-                        data.append(entry)
-                    except Exception as e:
-                        print(f"Error processing row in {file_path}: {e}")
-                        continue
-                        
+                df = pd.read_csv(output_path)
+                print(f"Fakeddit {subset} dataset loaded: {len(df)} samples")
+                if sample_size and sample_size < len(df):
+                    df = df.sample(sample_size, random_state=42)
+                    print(f"Sampled {sample_size} examples from Fakeddit {subset}")
+                return df
             except Exception as e:
-                print(f"Error loading file {file_path}: {e}")
-                continue
-
-        if not data:
-            print("No valid Fakeddit data found")
-            return pd.DataFrame()
-            
-        # Create standardized DataFrame
-        df = create_standardized_df(data, 'fakeddit')
+                print(f"Error loading processed file {output_path}: {e}")
+                print("Will reprocess the dataset...")
+        
+        # Construct paths for each data file
+        text_path = os.path.join(self.raw_dir, 'fakeddit', f"{subset}_text.csv")
+        image_path = os.path.join(self.raw_dir, 'fakeddit', f"{subset}_image.csv")
+        metadata_path = os.path.join(self.raw_dir, 'fakeddit', f"{subset}_metadata.csv")
+        
+        # Check if raw files exist
+        for path, name in zip([text_path, image_path, metadata_path], 
+                              ['text', 'image', 'metadata']):
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Fakeddit {subset} {name} file not found at {path}")
+        
+        # Load raw data
+        text_df = pd.read_csv(text_path)
+        image_df = pd.read_csv(image_path)
+        metadata_df = pd.read_csv(metadata_path)
+        
+        # Merge dataframes
+        df = pd.merge(text_df, image_df, on='id', how='left')
+        df = pd.merge(df, metadata_df, on='id', how='left')
+        
+        # Standardize column names and content
+        standardized_df = pd.DataFrame()
+        standardized_df['id'] = df['id']
+        standardized_df['text'] = df['title'].fillna('') + ' ' + df['clean_title'].fillna('')
+        standardized_df['image_path'] = df['image_url'].apply(
+            lambda x: os.path.join(self.raw_dir, 'fakeddit', 'images', 
+                                   x.split('/')[-1]) if isinstance(x, str) else None
+        )
+        standardized_df['has_image'] = standardized_df['image_path'].notna()
+        
+        # Create label based on 2way_label (0: real, 1: fake)
+        standardized_df['label'] = df['2way_label']
+        
+        # Add metadata
+        standardized_df['metadata'] = df.apply(
+            lambda row: {
+                'source': row.get('domain', ''),
+                'authors': [],
+                'publish_date': '',
+                'subreddit': row.get('subreddit', ''),
+                'upvote_ratio': row.get('upvote_ratio', 0),
+                'score': row.get('score', 0),
+                'num_comments': row.get('num_comments', 0)
+            }, axis=1
+        )
         
         # Print dataset statistics
-        stats = validate_dataset(df, 'fakeddit')
-        print("\nFakeddit Dataset Statistics:")
-        print(f"Total samples: {stats['total_samples']}")
-        print(f"Label distribution: {stats['label_distribution']}")
-        print(f"Text length - Mean: {stats['text_length_stats']['mean']:.2f}, "
-              f"Min: {stats['text_length_stats']['min']}, "
-              f"Max: {stats['text_length_stats']['max']}")
-        print(f"Images available: {stats['image_stats']['total_with_images']} "
-              f"({stats['image_stats']['percentage_with_images']:.2f}%)")
+        print(f"Fakeddit {subset} dataset:")
+        print(f"Total samples: {len(standardized_df)}")
+        print(f"Label distribution: {standardized_df['label'].value_counts()}")
+        print(f"Images available: {standardized_df['has_image'].sum()} ({standardized_df['has_image'].sum()/len(standardized_df)*100:.2f}%)")
         
-        return df
+        # Sample if needed
+        if sample_size and sample_size < len(standardized_df):
+            standardized_df = standardized_df.sample(sample_size, random_state=42)
+            print(f"Sampled {sample_size} examples from Fakeddit {subset}")
+        
+        # Save processed data
+        self._save_processed_data(standardized_df, f"fakeddit_{subset}")
+        
+        return standardized_df
 
     def load_fakenewsnet(self) -> pd.DataFrame:
         """Load and process FakeNewsNet dataset"""
@@ -290,7 +300,7 @@ class DatasetProcessor:
         if not os.path.exists(base_dir):
             print(f"Error: FakeNewsNet base directory not found: {base_dir}")
             return pd.DataFrame()
-        
+            
         # Set default sources and labels if not in config
         if 'sources' not in self.config['data']['fakenewsnet']:
             print("No sources specified for FakeNewsNet, using defaults ['gossipcop', 'politifact']")
@@ -306,14 +316,14 @@ class DatasetProcessor:
             if not os.path.exists(source_dir):
                 print(f"Warning: Source directory not found: {source_dir}")
                 continue
-            
+                
             # Process each label (fake and real)
             for label in self.config['data']['fakenewsnet']['labels']:
                 label_dir = os.path.join(source_dir, label)
                 if not os.path.exists(label_dir):
                     print(f"Warning: Label directory not found: {label_dir}")
                     continue
-                
+                    
                 # Get all article directories
                 article_dirs = [d for d in os.listdir(label_dir) 
                               if os.path.isdir(os.path.join(label_dir, d))]
@@ -328,7 +338,7 @@ class DatasetProcessor:
                         if not os.path.exists(json_path):
                             print(f"Warning: JSON file not found for {article_dir}: {json_path}")
                             continue
-                        
+                            
                         # Load article data
                         with open(json_path, 'r', encoding='utf-8', errors='ignore') as f:
                             article = json.load(f)
@@ -406,11 +416,11 @@ class DatasetProcessor:
             lambda x: preprocess_text(
                 x,
                 max_length=self.max_text_length,
-                remove_stopwords=True,
-                use_lemmatization=True,
-                use_stemming=False,
-                expand_contractions=True,
-                convert_slang=True
+                remove_stopwords=self.text_preproc_config['remove_stopwords'],
+                use_lemmatization=self.text_preproc_config['use_lemmatization'],
+                use_stemming=self.text_preproc_config['use_stemming'],
+                expand_contractions=self.text_preproc_config['expand_contractions'],
+                convert_slang=self.text_preproc_config['convert_slang']
             )
         )
         
@@ -541,7 +551,7 @@ class DatasetProcessor:
             fakenewsnet_df = self.load_fakenewsnet()
             if not fakenewsnet_df.empty:
                 dfs_to_combine.append(fakenewsnet_df)
-            
+        
         # Check if datasets are empty
         if not dfs_to_combine:
             raise ValueError("No valid data files found. Please check file paths and formats.")

@@ -60,6 +60,13 @@ model:
     backbone: "yolov11"
     trainable: false
     pooling: 'avg'
+    dropout_rate: 0.2
+    use_attention: true
+    output_dim: 512
+    # YOLOv11 specific parameters
+    width_mult: 0.75  # Width multiplier for model capacity control
+    depth_mult: 0.67  # Depth multiplier for model capacity control
+    use_fpn: true     # Whether to use Feature Pyramid Network
   
   # Fusion model configuration
   fusion:

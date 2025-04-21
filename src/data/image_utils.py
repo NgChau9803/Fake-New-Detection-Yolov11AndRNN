@@ -289,7 +289,7 @@ def manual_augment_image(img_array, config=None):
             factor = 1.0 + config.get('brightness', 0) * np.random.uniform(-1, 1)
             enhancer = ImageEnhance.Brightness(img)
             img = enhancer.enhance(factor)
-            
+        
         # Random hue/saturation (color)
         if config.get('saturation', 0) > 0 and img.mode == 'RGB':
             factor = 1.0 + config.get('saturation', 0) * np.random.uniform(-1, 1)
@@ -518,7 +518,7 @@ def augment_image(img_array, config=None):
     except Exception as e:
         print(f"TensorFlow augmentation failed, falling back to manual augmentation: {e}")
         traceback.print_exc()
-        return manual_augment_image(img_array, config)
+        return manual_augment_image(img_array, config) 
 
 def get_image_hash(image_path):
     """Calculate a hash for an image to use as a unique identifier

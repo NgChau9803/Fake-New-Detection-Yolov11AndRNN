@@ -26,12 +26,28 @@ class MultiModalFusionModel(tf.keras.Model):
             attention_heads=config['model']['text'].get('attention_heads', 4)
         )
         
+        # Configure specific parameters for YOLOv11 if selected
+        backbone_type = config['model']['image'].get('backbone_type', config['model']['image'].get('backbone', 'resnet50'))
+        backbone_params = {}
+        if backbone_type == 'yolov11':
+            backbone_params = {
+                'width_mult': config['model']['image'].get('width_mult', 0.75),
+                'depth_mult': config['model']['image'].get('depth_mult', 0.67),
+                'use_fpn': config['model']['image'].get('use_fpn', True)
+            }
+        
         # Image feature extractor
         self.image_extractor = ImageFeatureExtractor(
             input_shape=config['model']['image']['input_shape'],
-            backbone=config['model']['image']['backbone'],
+            backbone_type=backbone_type,
+            pretrained=config['model']['image'].get('pretrained', True),
+            output_dim=config['model']['image'].get('output_dim', 512),
+            dropout_rate=config['model']['image'].get('dropout_rate', 0.2),
+            l2_regularization=config['model']['image'].get('l2_regularization', 1e-5),
+            use_attention=config['model']['image'].get('use_attention', True),
+            pooling=config['model']['image'].get('pooling', 'avg'),
             trainable=config['model']['image'].get('trainable', False),
-            pooling=config['model']['image'].get('pooling', 'avg')
+            backbone_params=backbone_params
         )
         
         # Metadata processing layers with spectral normalization if enabled

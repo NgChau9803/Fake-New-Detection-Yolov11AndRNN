@@ -12,6 +12,7 @@ import json
 import pickle
 from PIL import Image
 import textwrap
+import math
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -81,7 +82,7 @@ def visualize_attention(model, text, image_path=None, tokenizer=None, config=Non
         print("Error: Model, tokenizer, and config are required")
         return
     
-    max_length = config['data']['max_text_length']
+    max_length = config.get('data', {}).get('max_text_length', 512)
     
     # Process text input
     token_ids, tokens = process_text_input(text, tokenizer, max_length)
@@ -90,7 +91,7 @@ def visualize_attention(model, text, image_path=None, tokenizer=None, config=Non
     text_tensor = tf.convert_to_tensor([token_ids], dtype=tf.int32)
     
     # Process image input if provided
-    image_shape = config['model']['image']['input_shape']
+    image_shape = config.get('model', {}).get('image', {}).get('input_shape', (224, 224, 3))
     if image_path and os.path.exists(image_path):
         image_array = process_image_input(image_path, image_shape[:2])
         image_tensor = tf.convert_to_tensor([image_array], dtype=tf.float32)
@@ -128,13 +129,15 @@ def visualize_attention(model, text, image_path=None, tokenizer=None, config=Non
                                   os.path.join(output_dir, f"text_attention_{timestamp}.png"))
         
         # Visualize image attention if available
-        if hasattr(model, 'image_extractor'):
-            feature_maps = model.image_extractor.get_feature_maps(image_tensor)
-            attention_map = model.image_extractor.get_attention_map(image_tensor)
+        if hasattr(model, 'image_extractor') and image_path and os.path.exists(image_path):
+            # Extract feature maps
+            feature_maps = model.image_extractor.get_feature_maps(image_tensor, training=False)
             
-            if image_path and os.path.exists(image_path):
-                visualize_image_attention(image_path, attention_map, feature_maps,
-                                       os.path.join(output_dir, f"image_attention_{timestamp}.png"))
+            # Generate attention map
+            attention_map = model.image_extractor.get_attention_map(image_tensor, training=False)
+            
+            visualize_image_attention(image_path, attention_map, feature_maps,
+                                   os.path.join(output_dir, f"image_attention_{timestamp}.png"))
         
         # Create multimodal visualization
         create_multimodal_visualization(text, tokens, prediction, 
@@ -145,6 +148,8 @@ def visualize_attention(model, text, image_path=None, tokenizer=None, config=Non
             
     except Exception as e:
         print(f"Error during visualization: {e}")
+        import traceback
+        traceback.print_exc()
 
 def visualize_text_attention(tokens, attention_weights, output_path):
     """Visualize text attention weights"""
@@ -200,14 +205,14 @@ def visualize_image_attention(image_path, attention_map, feature_maps, output_pa
     
     # Attention map
     plt.subplot(132)
-    plt.imshow(attention_map[0], cmap='jet')
+    plt.imshow(attention_map, cmap='jet')
     plt.title('Attention Map')
     plt.axis('off')
     
     # Overlay
     plt.subplot(133)
     plt.imshow(img)
-    plt.imshow(attention_map[0], cmap='jet', alpha=0.5)
+    plt.imshow(attention_map, cmap='jet', alpha=0.5)
     plt.title('Overlay')
     plt.axis('off')
     
@@ -217,18 +222,97 @@ def visualize_image_attention(image_path, attention_map, feature_maps, output_pa
     
     # Create feature map visualization
     feature_path = output_path.replace('.png', '_features.png')
-    num_features = min(8, feature_maps['backbone_output'].shape[-1])
     
-    plt.figure(figsize=(15, 5))
-    for i in range(num_features):
-        plt.subplot(2, 4, i+1)
-        plt.imshow(feature_maps['backbone_output'][0, :, :, i], cmap='viridis')
-        plt.title(f'Feature {i+1}')
+    # Determine backbone type and select appropriate feature maps
+    if 'stage4' in feature_maps:
+        # YOLO backbone
+        feature_title = "YOLO Backbone Features"
+        feature_keys = ['stage1', 'stage2', 'stage3', 'stage4']
+        if any(k.startswith('fpn_p') for k in feature_maps.keys()):
+            feature_keys = [k for k in feature_maps.keys() if k.startswith('fpn_p')]
+            feature_title = "YOLO FPN Features"
+    elif 'c5' in feature_maps:
+        # Standard CNN backbone (ResNet/EfficientNet)
+        feature_title = "Backbone Features"
+        feature_keys = ['c3', 'c4', 'c5']
+    else:
+        # Fallback to backbone output
+        feature_title = "Backbone Features"
+        feature_keys = ['backbone_output']
+    
+    # Create a visualization grid based on available features
+    if len(feature_keys) <= 4:
+        rows, cols = 1, len(feature_keys)
+    else:
+        rows = math.ceil(len(feature_keys) / 4)
+        cols = min(4, len(feature_keys))
+    
+    # Select feature key to visualize
+    plt.figure(figsize=(15, 5 * rows))
+    
+    for i, key in enumerate(feature_keys):
+        if key not in feature_maps:
+            continue
+            
+        # Get feature map for visualization
+        feature = feature_maps[key]
+        
+        # For each feature map, visualize a few channels
+        # Take the average across channels for simplicity
+        avg_feature = np.mean(feature, axis=-1)[0]  # First batch
+        
+        # Normalize for better visualization
+        avg_feature = (avg_feature - np.min(avg_feature)) / (np.max(avg_feature) - np.min(avg_feature) + 1e-7)
+        
+        # Plot
+        plt.subplot(rows, cols, i+1)
+        plt.imshow(avg_feature, cmap='viridis')
+        plt.title(f'{key}')
         plt.axis('off')
     
+    plt.suptitle(feature_title, fontsize=16)
     plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
     plt.savefig(feature_path, dpi=300)
     plt.close()
+    
+    # Create individual feature channel visualization for the highest level feature
+    if 'stage4' in feature_maps:
+        key = 'stage4'
+    elif 'fpn_p5' in feature_maps:
+        key = 'fpn_p5'
+    elif 'c5' in feature_maps:
+        key = 'c5'
+    else:
+        key = 'backbone_output'
+    
+    if key in feature_maps:
+        channels_path = output_path.replace('.png', '_channels.png')
+        feature = feature_maps[key]
+        
+        # Select first 16 channels for visualization
+        num_channels = min(16, feature.shape[-1])
+        rows = math.ceil(num_channels / 4)
+        
+        plt.figure(figsize=(15, 4 * rows))
+        
+        for i in range(num_channels):
+            channel = feature[0, :, :, i]
+            
+            # Normalize for better visualization
+            channel = (channel - np.min(channel)) / (np.max(channel) - np.min(channel) + 1e-7)
+            
+            # Plot
+            plt.subplot(rows, 4, i+1)
+            plt.imshow(channel, cmap='viridis')
+            plt.title(f'Channel {i+1}')
+            plt.axis('off')
+        
+        plt.suptitle(f'{key} - Individual Channels', fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92)
+        plt.savefig(channels_path, dpi=300)
+        plt.close()
 
 def create_multimodal_visualization(original_text, tokens, prediction, image_path=None, output_path=None):
     """Create a comprehensive multimodal visualization"""
@@ -308,7 +392,7 @@ def main():
         return
     
     # Load tokenizer
-    tokenizer_path = os.path.join(config['data']['processed_dir'], 'tokenizer.pickle')
+    tokenizer_path = os.path.join(config.get('data', {}).get('processed_dir', 'data/processed'), 'tokenizer.pickle')
     tokenizer = load_tokenizer(tokenizer_path)
     if tokenizer is None:
         return
