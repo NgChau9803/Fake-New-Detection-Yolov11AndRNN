@@ -87,10 +87,14 @@ class DatasetProcessor:
         self.config = config
         self.text_processor = TextProcessor()
         self.image_processor = ImageProcessor(config.get('image_processing', {}))
-        self.raw_dir = config['data']['raw_dir']
-        self.processed_dir = os.path.join(os.getcwd(), config['data']['processed_dir'])
-        self.images_dir = config['data']['images_dir']
-        self.cache_dir = os.path.join(os.getcwd(), config['data']['cache_dir'])
+        
+        # Convert all paths to absolute paths for consistency
+        base_path = os.getcwd()
+        self.raw_dir = os.path.join(base_path, config['data']['raw_dir'])
+        self.processed_dir = os.path.join(base_path, config['data']['processed_dir'])
+        self.images_dir = os.path.join(base_path, config['data']['images_dir'])
+        self.cache_dir = os.path.join(base_path, config['data']['cache_dir'])
+        self.force_reprocess = config['data'].get('force_reprocess', False)
         
         print(f"Initializing DatasetProcessor with:")
         print(f"  Raw data dir: {self.raw_dir}")
@@ -186,14 +190,49 @@ class DatasetProcessor:
                 
                 if 'metadata' in df.columns:
                     f.write("\nMetadata Statistics:\n")
-                    sources = df['metadata'].apply(lambda x: x.get('source', '')).unique()
-                    f.write(f"Number of unique sources: {len(sources)}\n")
                     
-                    authors = set()
-                    for authors_list in df['metadata'].apply(lambda x: x.get('authors', [])):
-                        if isinstance(authors_list, list):
-                            authors.update(authors_list)
-                    f.write(f"Number of unique authors: {len(authors)}\n")
+                    # Function to extract source from metadata (which might be string or dict)
+                    def get_source(metadata):
+                        if isinstance(metadata, dict):
+                            return metadata.get('source', '')
+                        elif isinstance(metadata, str):
+                            try:
+                                # Try to parse as JSON
+                                metadata_dict = json.loads(metadata)
+                                return metadata_dict.get('source', '')
+                            except:
+                                return ''
+                        return ''
+                    
+                    # Get unique sources
+                    try:
+                        sources = df['metadata'].apply(get_source).unique()
+                        f.write(f"Number of unique sources: {len(sources)}\n")
+                    except Exception as e:
+                        f.write(f"Error analyzing sources: {str(e)}\n")
+                    
+                    # Function to extract authors from metadata
+                    def get_authors(metadata):
+                        if isinstance(metadata, dict):
+                            return metadata.get('authors', [])
+                        elif isinstance(metadata, str):
+                            try:
+                                # Try to parse as JSON
+                                metadata_dict = json.loads(metadata)
+                                return metadata_dict.get('authors', [])
+                            except:
+                                return []
+                        return []
+                    
+                    # Get unique authors
+                    try:
+                        authors = set()
+                        for authors_list in df['metadata'].apply(get_authors):
+                            if isinstance(authors_list, list):
+                                authors.update(authors_list)
+                        f.write(f"Number of unique authors: {len(authors)}\n")
+                    except Exception as e:
+                        f.write(f"Error analyzing authors: {str(e)}\n")
             
             print(f"Saved {dataset_name} statistics to {stats_path}")
         except PermissionError as pe:
@@ -221,38 +260,40 @@ class DatasetProcessor:
                 print(f"Error loading processed file {output_path}: {e}")
                 print("Will reprocess the dataset...")
         
-        # Construct paths for each data file
-        text_path = os.path.join(self.raw_dir, 'fakeddit', f"{subset}_text.csv")
-        image_path = os.path.join(self.raw_dir, 'fakeddit', f"{subset}_image.csv")
-        metadata_path = os.path.join(self.raw_dir, 'fakeddit', f"{subset}_metadata.csv")
+        # Map the subset to the corresponding file in the config
+        subset_to_file = {
+            'train': 'multimodal_train.tsv',
+            'val': 'multimodal_validate.tsv',
+            'test': 'multimodal_test_public.tsv'
+        }
         
-        # Check if raw files exist
-        for path, name in zip([text_path, image_path, metadata_path], 
-                              ['text', 'image', 'metadata']):
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"Fakeddit {subset} {name} file not found at {path}")
+        tsv_file = subset_to_file.get(subset, 'multimodal_train.tsv')
+        tsv_path = os.path.join(self.raw_dir, 'fakeddit', tsv_file)
         
-        # Load raw data
-        text_df = pd.read_csv(text_path)
-        image_df = pd.read_csv(image_path)
-        metadata_df = pd.read_csv(metadata_path)
+        if not os.path.exists(tsv_path):
+            raise FileNotFoundError(f"Fakeddit {subset} file not found at {tsv_path}")
         
-        # Merge dataframes
-        df = pd.merge(text_df, image_df, on='id', how='left')
-        df = pd.merge(df, metadata_df, on='id', how='left')
+        # Load TSV data
+        print(f"Loading Fakeddit {subset} dataset from {tsv_path}")
+        df = pd.read_csv(tsv_path, sep='\t')
         
         # Standardize column names and content
         standardized_df = pd.DataFrame()
         standardized_df['id'] = df['id']
-        standardized_df['text'] = df['title'].fillna('') + ' ' + df['clean_title'].fillna('')
-        standardized_df['image_path'] = df['image_url'].apply(
-            lambda x: os.path.join(self.raw_dir, 'fakeddit', 'images', 
-                                   x.split('/')[-1]) if isinstance(x, str) else None
+        standardized_df['text'] = df['clean_title'].fillna('')
+        if 'title' in df.columns:
+            standardized_df['text'] = df['title'].fillna('') + ' ' + standardized_df['text']
+        
+        # Handle image paths
+        standardized_df['image_path'] = df.apply(
+            lambda row: os.path.join(os.path.join(self.images_dir, 'fakeddit/public_image_set'), 
+                                   f"{row['id']}.jpg") if row.get('hasImage', False) else None,
+            axis=1
         )
-        standardized_df['has_image'] = standardized_df['image_path'].notna()
+        standardized_df['has_image'] = df.get('hasImage', False)
         
         # Create label based on 2way_label (0: real, 1: fake)
-        standardized_df['label'] = df['2way_label']
+        standardized_df['label'] = df['2_way_label']
         
         # Add metadata
         standardized_df['metadata'] = df.apply(
@@ -266,6 +307,9 @@ class DatasetProcessor:
                 'num_comments': row.get('num_comments', 0)
             }, axis=1
         )
+        
+        # Add dataset source information
+        standardized_df['dataset_source'] = 'fakeddit'
         
         # Print dataset statistics
         print(f"Fakeddit {subset} dataset:")
@@ -431,20 +475,44 @@ class DatasetProcessor:
         # Process image data
         print("Processing image data...")
         def process_image(row):
-            image_paths = row['image_paths']
-            if not image_paths:
-                return None
-                
-            # Try each image path until we find a valid one
-            for img_path in image_paths:
+            # First check if we have a single image_path (from Fakeddit)
+            if 'image_path' in row and pd.notna(row['image_path']):
+                img_path = row['image_path']
                 if os.path.exists(img_path):
-                    try:
-                        # Return the first valid image path
-                        # The actual preprocessing will be done during training
+                    return img_path
+            
+            # If no valid image_path, try image_paths (from FakeNewsNet)
+            if 'image_paths' not in row or pd.isna(row['image_paths']):
+                return None
+            
+            image_paths = row['image_paths']
+            
+            # Handle if image_paths is a string (from CSV loading)
+            if isinstance(image_paths, str):
+                try:
+                    # Try to load as JSON if it's a string representation of a list
+                    if image_paths.startswith('[') and image_paths.endswith(']'):
+                        image_paths = json.loads(image_paths)
+                        
+                        # Now we have a list, check each path
+                        for img_path in image_paths:
+                            if isinstance(img_path, str) and os.path.exists(img_path):
+                                return img_path
+                    else:
+                        # Single path as string
+                        if os.path.exists(image_paths):
+                            return image_paths
+                except:
+                    # If it's not valid JSON but a single path
+                    if os.path.exists(image_paths):
+                        return image_paths
+            
+            # Handle if image_paths is already a list
+            elif isinstance(image_paths, list):
+                for img_path in image_paths:
+                    if isinstance(img_path, str) and os.path.exists(img_path):
                         return img_path
-                    except Exception as e:
-                        print(f"Error processing image {img_path}: {e}")
-                        continue
+            
             return None
         
         df['processed_image_path'] = df.apply(process_image, axis=1)
@@ -642,6 +710,7 @@ class DatasetProcessor:
             preprocessed_path = os.path.join(self.processed_dir, 'preprocessed_dataset.csv')
             if os.path.exists(preprocessed_path):
                 df = pd.read_csv(preprocessed_path)
+                print(f"Loaded preprocessed dataset with {len(df)} samples")
             else:
                 df = self.preprocess_dataset()
         
@@ -652,138 +721,24 @@ class DatasetProcessor:
         # Check if cached features exist
         if self.use_cache and os.path.exists(cache_path):
             print(f"Loading cached features from {cache_path}")
-            with open(cache_path, 'rb') as f:
-                cache_data = pickle.load(f)
-                features_list = cache_data['features']
-                labels_list = cache_data['labels']
-                tokenizer = cache_data['tokenizer']
-        else:
-            # Create a vocabulary from text data
-            from tensorflow.keras.preprocessing.text import Tokenizer
-            tokenizer = Tokenizer(num_words=self.max_vocab_size)
-            tokenizer.fit_on_texts(df['processed_text'].fillna(''))
-            
-            # Save the tokenizer
-            tokenizer_path = os.path.join(self.processed_dir, 'tokenizer.pickle')
             try:
-                with open(tokenizer_path, 'wb') as handle:
-                    pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
-            except PermissionError as pe:
-                print(f"Permission error saving tokenizer to {tokenizer_path}: {pe}")
-                print("Continuing without saving tokenizer...")
-            
-            # Function to create features and labels
-            def create_features(row):
-                # Text features
-                text = row['processed_text'] if pd.notna(row['processed_text']) else ''
-                text_sequence = tokenizer.texts_to_sequences([text])[0]
-                # Pad sequence to fixed length
-                if len(text_sequence) > self.max_text_length:
-                    text_sequence = text_sequence[:self.max_text_length]
-                else:
-                    text_sequence = text_sequence + [0] * (self.max_text_length - len(text_sequence))
-                
-                # Image features - load and preprocess image if available
-                image_features = np.zeros(self.config['model']['image']['input_shape'])
-                if pd.notna(row['processed_image_path']) and os.path.exists(str(row['processed_image_path'])):
-                    # Check file permissions before processing
-                    img_path = str(row['processed_image_path'])
-                    if not os.access(img_path, os.R_OK):
-                        print(f"Warning: No read permission for image {img_path}")
-                    else:
-                        try:
-                            image_features = preprocess_image(
-                                img_path,
-                                target_size=self.config['model']['image']['input_shape'][:2]
-                            )
-                        except Exception as e:
-                            print(f"Error preprocessing image {img_path}: {e}")
-                
-                # Metadata features - extract key metadata and convert to numerical format
-                metadata_features = np.zeros(10)  # Fixed size for metadata features
-                
-                # Handle metadata which could be a string (from CSV) or dict
-                metadata = row['metadata']
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except:
-                        metadata = {}
-                
-                # Extract numerical metadata if available
-                if isinstance(metadata, dict):
-                    # Example metadata extraction - customize based on your needs
-                    if 'score' in metadata:
-                        try:
-                            metadata_features[0] = float(metadata['score'])
-                        except:
-                            pass
-                    if 'upvote_ratio' in metadata:
-                        try:
-                            metadata_features[1] = float(metadata['upvote_ratio'])
-                        except:
-                            pass
-                    if 'num_comments' in metadata:
-                        try:
-                            metadata_features[2] = float(metadata['num_comments'])
-                        except:
-                            pass
-                
-                return {
-                    'text': text_sequence,
-                    'image': image_features,
-                    'metadata': metadata_features
-                }, row['label']
-            
-            # Apply the function to create features for each row
-            features_list = []
-            labels_list = []
-            
-            print("Creating features...")
-            for _, row in tqdm(df.iterrows(), total=len(df)):
-                try:
-                    features, label = create_features(row)
-                    features_list.append(features)
-                    labels_list.append(int(label))
-                except Exception as e:
-                    print(f"Error creating features for row with ID {row.get('id', 'unknown')}: {e}")
-            
-            # Cache the features if caching is enabled
-            if self.use_cache:
-                print(f"Caching features to {cache_path}")
-                cache_dir = os.path.dirname(cache_path)
-                
-                # Check if cache directory exists and is writable
-                if not os.path.exists(cache_dir):
-                    try:
-                        os.makedirs(cache_dir, exist_ok=True)
-                    except PermissionError as pe:
-                        print(f"Permission error creating cache directory {cache_dir}: {pe}")
-                        print("Continuing without caching...")
-                        self.use_cache = False
-                
-                # Check if we have write access to the cache directory
-                if self.use_cache and not os.access(cache_dir, os.W_OK):
-                    print(f"No write permission for cache directory {cache_dir}")
-                    print("Continuing without caching...")
-                    self.use_cache = False
-                
-                # Try to save the cache
-                if self.use_cache:
-                    try:
-                        with open(cache_path, 'wb') as f:
-                            pickle.dump({
-                                'features': features_list,
-                                'labels': labels_list,
-                                'tokenizer': tokenizer
-                            }, f)
-                    except PermissionError as pe:
-                        print(f"Permission error saving cache to {cache_path}: {pe}")
-                        print("Continuing without caching...")
+                with open(cache_path, 'rb') as f:
+                    cache_data = pickle.load(f)
+                    features_list = cache_data['features']
+                    labels_list = cache_data['labels']
+                    tokenizer = cache_data['tokenizer']
+                    print(f"Successfully loaded cached features: {len(features_list)} samples")
+            except Exception as e:
+                print(f"Error loading cached features: {e}")
+                print("Proceeding with feature extraction...")
+                tokenizer, features_list, labels_list = self._extract_features(df)
+        else:
+            print("No cache found or cache disabled. Extracting features...")
+            tokenizer, features_list, labels_list = self._extract_features(df)
         
-        # Split into train, validation, and test sets
-        train_ratio = self.config['data']['train_ratio']
-        val_ratio = self.config['data']['val_ratio']
+        # Determine train/val/test split ratios
+        train_ratio = self.train_ratio
+        val_ratio = self.val_split
         
         # First split: separate test set
         train_val_features, test_features, train_val_labels, test_labels = train_test_split(
@@ -833,6 +788,204 @@ class DatasetProcessor:
         test_dataset = create_tf_dataset(test_features, test_labels)
         
         return train_dataset, val_dataset, test_dataset, tokenizer.word_index
+        
+    def _extract_features(self, df):
+        """Extract features from dataset in batches to reduce memory usage"""
+        # Create a vocabulary from text data
+        from tensorflow.keras.preprocessing.text import Tokenizer
+        print("Creating tokenizer...")
+        tokenizer = Tokenizer(num_words=self.max_vocab_size)
+        tokenizer.fit_on_texts(df['processed_text'].fillna(''))
+        
+        # Save the tokenizer
+        tokenizer_path = os.path.join(self.processed_dir, 'tokenizer.pickle')
+        try:
+            with open(tokenizer_path, 'wb') as handle:
+                pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"Saved tokenizer to {tokenizer_path}")
+        except PermissionError as pe:
+            print(f"Permission error saving tokenizer to {tokenizer_path}: {pe}")
+            print("Continuing without saving tokenizer...")
+        
+        # Process in smaller batches to reduce memory pressure
+        features_list = []
+        labels_list = []
+        # Use smaller batch size to reduce memory pressure
+        batch_size = 300  # Reduced from 1000 to 300
+        
+        print(f"Processing {len(df)} samples in batches of {batch_size}...")
+        
+        # Get system memory info for monitoring
+        try:
+            import psutil
+            def get_memory_usage():
+                process = psutil.Process()
+                memory_info = process.memory_info()
+                return f"Memory usage: {memory_info.rss / (1024 * 1024):.1f} MB"
+        except ImportError:
+            def get_memory_usage():
+                return "Memory usage tracking not available"
+        
+        for i in range(0, len(df), batch_size):
+            # Print memory usage before processing batch
+            print(f"Before batch {i//batch_size + 1}: {get_memory_usage()}")
+            
+            batch_df = df.iloc[i:i+batch_size]
+            batch_features = []
+            batch_labels = []
+            
+            print(f"Processing batch {i//batch_size + 1}/{(len(df)-1)//batch_size + 1}")
+            
+            # Process each row in the batch
+            success_count = 0
+            error_count = 0
+            for _, row in tqdm(batch_df.iterrows(), total=len(batch_df), desc=f"Batch {i//batch_size + 1}"):
+                try:
+                    # Extract features for this sample
+                    features, label = self._create_features_for_sample(row, tokenizer)
+                    batch_features.append(features)
+                    batch_labels.append(label)
+                    success_count += 1
+                except Exception as e:
+                    # Handle errors gracefully - log but continue
+                    print(f"Error processing row {row.get('id', 'unknown')}: {e}")
+                    error_count += 1
+                    continue
+            
+            # Report batch processing results
+            print(f"Batch {i//batch_size + 1} complete: {success_count} successful, {error_count} errors")
+            
+            # Extend main lists with batch results
+            features_list.extend(batch_features)
+            batch_features = None  # Help garbage collector
+            
+            labels_list.extend(batch_labels)
+            batch_labels = None  # Help garbage collector
+            
+            batch_df = None  # Help garbage collector
+            
+            # Force garbage collection to free memory
+            import gc
+            gc.collect()
+            
+            # Print memory usage after processing batch
+            print(f"After batch {i//batch_size + 1}: {get_memory_usage()}")
+            
+            # If we're at a multiple of 5 batches, save progress
+            if (i//batch_size + 1) % 5 == 0:
+                print(f"Intermediate progress - processed {len(features_list)} samples so far")
+        
+        print(f"Extracted features for {len(features_list)} samples")
+        return tokenizer, features_list, labels_list
+    
+    def _create_features_for_sample(self, row, tokenizer):
+        """Extract features for a single sample"""
+        # Text features
+        text = row['processed_text'] if pd.notna(row['processed_text']) else ''
+        text_sequence = tokenizer.texts_to_sequences([text])[0]
+        # Pad sequence to fixed length
+        if len(text_sequence) > self.max_text_length:
+            text_sequence = text_sequence[:self.max_text_length]
+        else:
+            text_sequence = text_sequence + [0] * (self.max_text_length - len(text_sequence))
+        
+        # Image features - load and preprocess image if available
+        image_shape = tuple(self.config['model']['image']['input_shape'])
+        # Explicitly create a float32 array to reduce memory usage
+        image_features = np.zeros(image_shape, dtype=np.float32)
+        
+        if pd.notna(row['processed_image_path']) and os.path.exists(str(row['processed_image_path'])):
+            # Check file permissions before processing
+            img_path = str(row['processed_image_path'])
+            if not os.access(img_path, os.R_OK):
+                print(f"Warning: No read permission for image {img_path}")
+            else:
+                try:
+                    # Check if it's a preprocessed .npy file
+                    if img_path.endswith('.npy'):
+                        try:
+                            # Load directly as float32 to save memory
+                            image_features = np.load(img_path).astype(np.float32)
+                        except Exception as e:
+                            print(f"Error loading .npy image {img_path}: {e}")
+                    else:
+                        # Process regular image file
+                        from src.data.image_utils import preprocess_image
+                        try:
+                            # Process image with explicit float32 dtype - ensure target_size is correct
+                            image_features = preprocess_image(
+                                img_path,
+                                target_size=image_shape[:2],
+                            )
+                        except np.core._exceptions._ArrayMemoryError as me:
+                            print(f"Memory error processing image {img_path}. Using zeros instead: {me}")
+                            # Keep the zero array created above
+                        except Exception as e:
+                            print(f"Error preprocessing image {img_path}: {e}")
+                except Exception as e:
+                    print(f"Error preprocessing image {img_path}: {e}")
+        
+        # Metadata features - extract key metadata and convert to numerical format
+        metadata_features = np.zeros(10, dtype=np.float32)  # Fixed size for metadata features
+        
+        # Handle metadata which could be a string (from CSV) or dict
+        metadata = row['metadata']
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except:
+                metadata = {}
+        elif not isinstance(metadata, dict):
+            metadata = {}
+        
+        # Extract numeric features from metadata
+        try:
+            # Common features that might exist across datasets
+            if 'score' in metadata:
+                metadata_features[0] = np.float32(metadata['score']) if pd.notna(metadata['score']) else 0.0
+            if 'num_comments' in metadata:
+                metadata_features[1] = np.float32(metadata['num_comments']) if pd.notna(metadata['num_comments']) else 0.0
+            if 'upvote_ratio' in metadata:
+                metadata_features[2] = np.float32(metadata['upvote_ratio']) if pd.notna(metadata['upvote_ratio']) else 0.0
+                
+            # Indicator features
+            metadata_features[3] = np.float32(1.0) if row['dataset_source'] == 'fakeddit' else np.float32(0.0)
+            metadata_features[4] = np.float32(1.0) if row['dataset_source'] == 'fakenewsnet' else np.float32(0.0)
+            
+            # Text length feature
+            if pd.notna(row['processed_text']):
+                metadata_features[5] = np.float32(min(len(row['processed_text']) / 1000.0, 5.0))  # Normalize text length
+                
+            # Has image feature
+            metadata_features[6] = np.float32(1.0) if pd.notna(row['processed_image_path']) else np.float32(0.0)
+            
+            # Timestamp feature if available
+            if 'timestamp' in metadata or 'created_utc' in metadata:
+                timestamp = metadata.get('timestamp', metadata.get('created_utc', 0))
+                metadata_features[7] = np.float32(float(timestamp) / 1e10) if pd.notna(timestamp) else np.float32(0.0)
+                
+            # Keywords count if available
+            if 'keywords' in metadata and isinstance(metadata['keywords'], list):
+                metadata_features[8] = np.float32(min(len(metadata['keywords']) / 10.0, 1.0))
+                
+            # Authors count if available
+            if 'authors' in metadata and isinstance(metadata['authors'], list):
+                metadata_features[9] = np.float32(min(len(metadata['authors']) / 5.0, 1.0))
+                
+        except Exception as e:
+            print(f"Error processing metadata: {e}")
+            
+        # Create features dictionary
+        features = {
+            'text': np.array(text_sequence, dtype=np.int32),
+            'image': image_features,  # Already float32
+            'metadata': metadata_features  # Already float32
+        }
+        
+        # Label
+        label = int(row['label']) if pd.notna(row['label']) else 0
+        
+        return features, label
     
     def create_cross_dataset_validation_set(self, df=None):
         """Create a validation set from a different dataset source than training"""

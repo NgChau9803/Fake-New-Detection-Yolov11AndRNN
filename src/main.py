@@ -10,6 +10,9 @@ import pandas as pd
 from datetime import datetime
 import json
 
+# Add the project root directory to sys.path
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -62,11 +65,14 @@ def setup_environment():
 def validate_paths(config):
     """Validate that all required paths exist and create if necessary"""
     logger.info("Validating data paths...")
+    
+    # Convert paths to absolute paths
+    base_path = os.getcwd()
     required_dirs = [
-        config['data']['raw_dir'],
-        config['data']['processed_dir'],
-        config['data']['images_dir'],
-        config['data']['cache_dir']
+        os.path.join(base_path, config['data']['raw_dir']),
+        os.path.join(base_path, config['data']['processed_dir']),
+        os.path.join(base_path, config['data']['images_dir']),
+        os.path.join(base_path, config['data']['cache_dir'])
     ]
     
     for dir_path in required_dirs:
@@ -77,11 +83,12 @@ def validate_paths(config):
     # Validate dataset files if specified
     if 'fakeddit' in config['data'] and 'files' in config['data']['fakeddit']:
         for file_path in config['data']['fakeddit']['files']:
-            if not os.path.exists(file_path):
-                logger.warning(f"Fakeddit file not found: {file_path}")
+            abs_file_path = os.path.join(base_path, file_path)
+            if not os.path.exists(abs_file_path):
+                logger.warning(f"Fakeddit file not found: {abs_file_path}")
     
     if 'fakenewsnet' in config['data'] and 'base_dir' in config['data']['fakenewsnet']:
-        fakenewsnet_base = config['data']['fakenewsnet']['base_dir']
+        fakenewsnet_base = os.path.join(base_path, config['data']['fakenewsnet']['base_dir'])
         if not os.path.exists(fakenewsnet_base):
             logger.warning(f"FakeNewsNet base directory not found: {fakenewsnet_base}")
     
@@ -109,28 +116,49 @@ def process_datasets(config):
     dataset_processor = DatasetProcessor(config)
     
     logger.info("Processing datasets...")
-    dataset_processor.process_datasets()
+    try:
+        dataset_processor.process_datasets()
+    except Exception as e:
+        logger.error(f"Error in dataset processing: {e}")
+        logger.error("Attempting to continue with existing processed files...")
     
     logger.info("Combining datasets...")
-    combined_df = dataset_processor.combine_datasets()
+    try:
+        combined_df = dataset_processor.combine_datasets()
+    except Exception as e:
+        logger.error(f"Error combining datasets: {e}")
+        logger.error("Attempting to continue with existing combined dataset...")
+        combined_df = None
     
     logger.info("Preprocessing dataset...")
-    dataset_processor.preprocess_dataset(combined_df)
+    try:
+        if combined_df is not None:
+            dataset_processor.preprocess_dataset(combined_df)
+        else:
+            # Try to preprocess without combined_df
+            dataset_processor.preprocess_dataset()
+    except Exception as e:
+        logger.error(f"Error preprocessing dataset: {e}")
+        logger.error("Attempting to continue with existing preprocessed dataset...")
     
     logger.info("Creating TensorFlow datasets...")
-    train_dataset, val_dataset, test_dataset, word_index = dataset_processor.create_tf_datasets()
-    
-    logger.info(f"Dataset processing complete: {len(word_index)} unique tokens in vocabulary")
-    logger.info(f"Train dataset size: {tf.data.experimental.cardinality(train_dataset).numpy()}")
-    logger.info(f"Validation dataset size: {tf.data.experimental.cardinality(val_dataset).numpy()}")
-    logger.info(f"Test dataset size: {tf.data.experimental.cardinality(test_dataset).numpy()}")
-    
-    return {
-        'train_dataset': train_dataset,
-        'val_dataset': val_dataset,
-        'test_dataset': test_dataset,
-        'word_index': word_index
-    }
+    try:
+        train_dataset, val_dataset, test_dataset, word_index = dataset_processor.create_tf_datasets()
+        
+        logger.info(f"Dataset processing complete: {len(word_index)} unique tokens in vocabulary")
+        logger.info(f"Train dataset size: {tf.data.experimental.cardinality(train_dataset).numpy()}")
+        logger.info(f"Validation dataset size: {tf.data.experimental.cardinality(val_dataset).numpy()}")
+        logger.info(f"Test dataset size: {tf.data.experimental.cardinality(test_dataset).numpy()}")
+        
+        return {
+            'train_dataset': train_dataset,
+            'val_dataset': val_dataset,
+            'test_dataset': test_dataset,
+            'word_index': word_index
+        }
+    except Exception as e:
+        logger.error(f"Error creating TensorFlow datasets: {e}")
+        raise
 
 def build_model(config, vocab_size):
     """Build the multi-modal fusion model"""

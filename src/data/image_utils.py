@@ -23,7 +23,7 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
         noise_removal (bool): Whether to apply noise removal techniques
         
     Returns:
-        numpy.ndarray: Preprocessed image array
+        numpy.ndarray: Preprocessed image array with dtype float32
     """
     try:
         # Try to open the image
@@ -37,10 +37,10 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
                 img = Image.open(image_path)
             except Exception as e:
                 print(f"Warning: Image {image_path} is corrupted: {e}")
-                return np.zeros((*target_size, 3 if not grayscale else 1))
+                return np.zeros((*target_size, 3 if not grayscale else 1), dtype=np.float32)
         except Exception as e:
             print(f"Error opening image {image_path}: {e}")
-            return np.zeros((*target_size, 3 if not grayscale else 1))
+            return np.zeros((*target_size, 3 if not grayscale else 1), dtype=np.float32)
         
         # Convert to grayscale if specified
         if grayscale and img.mode != 'L':
@@ -65,8 +65,8 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
         paste_y = (target_size[1] - img.height) // 2
         new_img.paste(img, (paste_x, paste_y))
         
-        # Convert to numpy array
-        img_array = np.array(new_img)
+        # Convert to numpy array with explicit float32 dtype
+        img_array = np.array(new_img, dtype=np.float32)
         
         # Normalize if specified
         if normalize:
@@ -78,17 +78,18 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
                 if "resnet" in keras.applications.__dict__:
                     if normalize:  # Only if we normalized to [0,1]
                         # Convert from [0,1] to ResNet expected range
-                        img_array = keras.applications.resnet.preprocess_input(img_array * 255.0)
+                        img_array = keras.applications.resnet.preprocess_input(img_array * 255.0).astype(np.float32)
                     else:
-                        img_array = keras.applications.resnet.preprocess_input(img_array)
+                        img_array = keras.applications.resnet.preprocess_input(img_array).astype(np.float32)
             except Exception as e:
                 print(f"Warning: Model-specific preprocessing failed: {e}")
         
-        return img_array
+        # Ensure output is float32
+        return img_array.astype(np.float32)
     except Exception as e:
         print(f"Error preprocessing image {image_path}: {e}")
         traceback.print_exc()
-        return np.zeros((*target_size, 3 if not grayscale else 1))
+        return np.zeros((*target_size, 3 if not grayscale else 1), dtype=np.float32)
 
 def extract_image_features(image_array, method='basic', model=None):
     """

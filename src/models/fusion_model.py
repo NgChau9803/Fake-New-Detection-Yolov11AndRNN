@@ -1,5 +1,11 @@
 import tensorflow as tf
-import tensorflow_addons as tfa
+# Try to import tensorflow_addons, but handle gracefully if not available
+try:
+    import tensorflow_addons as tfa
+    TFA_AVAILABLE = True
+except ImportError:
+    print("TensorFlow Addons not available. Using standard layers instead.")
+    TFA_AVAILABLE = False
 from src.models.text_model import TextFeatureExtractor
 from src.models.image_model import ImageFeatureExtractor
 import numpy as np
@@ -12,7 +18,7 @@ class MultiModalFusionModel(tf.keras.Model):
         self.config = config
         self.fusion_method = config['model']['fusion'].get('fusion_method', 'cross_attention')
         self.visualize_attention = config['model']['text'].get('visualize_attention', False)
-        self.use_spectral_norm = config['model']['fusion'].get('use_spectral_norm', True)
+        self.use_spectral_norm = config['model']['fusion'].get('use_spectral_norm', True) and TFA_AVAILABLE
         self.use_stochastic_depth = config['model']['fusion'].get('use_stochastic_depth', False)
         self.stochastic_depth_rate = config['model']['fusion'].get('stochastic_depth_rate', 0.1)
         self.use_gradient_reversal = config['model']['fusion'].get('use_gradient_reversal', False)
@@ -27,9 +33,19 @@ class MultiModalFusionModel(tf.keras.Model):
         )
         
         # Configure specific parameters for YOLOv11 if selected
-        backbone_type = config['model']['image'].get('backbone_type', config['model']['image'].get('backbone', 'resnet50'))
+        backbone_type = config['model']['image'].get('backbone_type', config['model']['image'].get('backbone', 'yolov11'))
         backbone_params = {}
-        if backbone_type == 'yolov11':
+        if backbone_type == 'yolov11' or 'yolo' in backbone_type.lower():
+            print("Using YOLOv11 backbone for image feature extraction")
+            backbone_type = 'yolov11'  # Normalize the name
+            backbone_params = {
+                'width_mult': config['model']['image'].get('width_mult', 0.75),
+                'depth_mult': config['model']['image'].get('depth_mult', 0.67),
+                'use_fpn': config['model']['image'].get('use_fpn', True)
+            }
+        elif backbone_type != 'resnet50' and backbone_type != 'efficientnetb0':
+            print(f"Unsupported backbone type '{backbone_type}', falling back to YOLOv11")
+            backbone_type = 'yolov11'
             backbone_params = {
                 'width_mult': config['model']['image'].get('width_mult', 0.75),
                 'depth_mult': config['model']['image'].get('depth_mult', 0.67),
