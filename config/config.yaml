@@ -84,7 +84,7 @@ model:
 
 # Training configuration
 training:
-  batch_size: 32
+  batch_size: 16
   epochs: 50
   learning_rate: 0.001
   optimizer: "adamw"  # Options: adam, adamw, sgd, radam

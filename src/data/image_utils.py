@@ -26,6 +26,10 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
         numpy.ndarray: Preprocessed image array with dtype float32
     """
     try:
+        # Strict check: if image_path is empty or not a file, return zeros
+        if not image_path or not isinstance(image_path, str) or not os.path.isfile(image_path):
+            print(f"Warning: Invalid or missing image path: {image_path}")
+            return np.zeros((*target_size, 3 if not grayscale else 1), dtype=np.float32)
         # Try to open the image
         try:
             img = Image.open(image_path)

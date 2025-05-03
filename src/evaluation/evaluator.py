@@ -89,7 +89,7 @@ class ModelEvaluator:
         print(f"Validation dataset sources: {val_sources}")
         
         # Create TensorFlow dataset for validation
-        _, _, val_dataset, _ = dataset_processor.create_tf_datasets(val_df)
+        _, _, val_dataset, _ = dataset_processor.create_tf_dataset(val_df)
         
         # Evaluate on validation dataset
         y_true = []

@@ -162,10 +162,9 @@ class MultiModalFusionModel(tf.keras.Model):
                 )
         
         # L1/L2 regularization with the regularizer's strength
-        regularizer = tf.keras.regularizers.l1_l2(
-            l1=config['model']['fusion'].get('l1_reg', 1e-5),
-            l2=config['model']['fusion'].get('l2_reg', 1e-4)
-        )
+        l1_reg = float(config['model']['fusion'].get('l1_reg', 1e-5))
+        l2_reg = float(config['model']['fusion'].get('l2_reg', 1e-4))
+        regularizer = tf.keras.regularizers.l1_l2(l1=l1_reg, l2=l2_reg)
         
         # Output layer for binary classification with regularization
         self.output_layer = tf.keras.layers.Dense(

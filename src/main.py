@@ -13,16 +13,25 @@ import json
 # Add the project root directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
+# Import and configure TensorFlow
+from src.tf_config import configure_tensorflow
+configure_tensorflow()
+
 # Configure logging
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+        logging.FileHandler(log_file),
         logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
+logger.info(f"Logging to {log_file}")
 
 # Import project modules
 from src.data.dataset import DatasetProcessor
@@ -143,7 +152,7 @@ def process_datasets(config):
     
     logger.info("Creating TensorFlow datasets...")
     try:
-        train_dataset, val_dataset, test_dataset, word_index = dataset_processor.create_tf_datasets()
+        train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
         
         logger.info(f"Dataset processing complete: {len(word_index)} unique tokens in vocabulary")
         logger.info(f"Train dataset size: {tf.data.experimental.cardinality(train_dataset).numpy()}")
@@ -318,15 +327,14 @@ def main():
         if datasets is None:
             logger.info("Loading pre-processed datasets...")
             dataset_processor = DatasetProcessor(config)
-            train_dataset, val_dataset, test_dataset, word_index = dataset_processor.load_tf_datasets()
+            train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
             datasets = {
                 'train_dataset': train_dataset,
                 'val_dataset': val_dataset,
                 'test_dataset': test_dataset,
                 'word_index': word_index
             }
-        
-        vocab_size = len(datasets['word_index'])
+        vocab_size = max_token_index + 1
         model = build_model(config, vocab_size)
         model, history, output_dir = train_model(config, model, datasets)
     
@@ -338,7 +346,7 @@ def main():
             # Load datasets if not already loaded
             if datasets is None:
                 dataset_processor = DatasetProcessor(config)
-                train_dataset, val_dataset, test_dataset, word_index = dataset_processor.load_tf_datasets()
+                train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
                 datasets = {
                     'train_dataset': train_dataset,
                     'val_dataset': val_dataset,
@@ -369,7 +377,7 @@ def main():
             # Load datasets if not already loaded
             if datasets is None:
                 dataset_processor = DatasetProcessor(config)
-                train_dataset, val_dataset, test_dataset, word_index = dataset_processor.load_tf_datasets()
+                train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
                 datasets = {
                     'train_dataset': train_dataset,
                     'val_dataset': val_dataset,

@@ -64,13 +64,30 @@ class ClassActivationLogger(tf.keras.callbacks.Callback):
         self.log_dir = os.path.join(log_dir, datetime.now().strftime("%Y%m%d-%H%M%S"), 'activations')
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # Get sample data
+        # Get sample data robustly
         self.sample_data = []
-        for features, labels in validation_data.take(1):
+        for batch in validation_data.take(1):
+            # If batch is a tuple (features, labels)
+            if isinstance(batch, tuple) and len(batch) == 2:
+                features, labels = batch
+            # If batch is a dict with 'label' key
+            elif isinstance(batch, dict) and 'label' in batch:
+                features = {k: v for k, v in batch.items() if k != 'label'}
+                labels = batch['label']
+            else:
+                raise ValueError("Validation batch format not recognized for ClassActivationLogger.")
             for i in range(min(self.num_samples, len(labels))):
+                label_val = labels[i].numpy() if hasattr(labels[i], 'numpy') else labels[i]
+                # Robustly extract scalar
+                if isinstance(label_val, (np.ndarray, list)) and len(label_val) == 1:
+                    label_val = float(label_val[0])
+                elif hasattr(label_val, 'item'):
+                    label_val = float(label_val.item())
+                else:
+                    label_val = float(label_val)
                 self.sample_data.append((
                     {k: v[i:i+1] for k, v in features.items()},
-                    labels[i].numpy()
+                    label_val
                 ))
     
     def on_epoch_end(self, epoch, logs=None):

@@ -33,13 +33,13 @@ create_directories() {
 
 # Function to set up virtual environment
 setup_venv() {
-    if [ ! -d ".venv" ]; then
+    if [ ! -d "venv" ]; then
         echo -e "${GREEN}Creating Python 3.11 virtual environment...${NC}"
-        python3.11 -m venv .venv
+        python3.11 -m venv venv
     fi
     
     echo -e "${GREEN}Activating virtual environment...${NC}"
-    source .venv/bin/activate
+    source venv/bin/activate
     
     echo -e "${GREEN}Installing dependencies from requirements.txt...${NC}"
     pip install -r requirements.txt
@@ -70,23 +70,23 @@ run_option() {
     case $1 in
         1)
             echo -e "\n${CYAN}Running Data Preprocessing...${NC}"
-            python -c "from src.data.dataset import DatasetProcessor; import yaml; with open('config/config.yaml', 'r') as f: config = yaml.safe_load(f); processor = DatasetProcessor(config); processor.process_datasets(); processor.combine_datasets(); processor.preprocess_dataset()"
+            python3.11 -c "from src.data.dataset import DatasetProcessor; import yaml; with open('config/config.yaml', 'r') as f: config = yaml.safe_load(f); processor = DatasetProcessor(config); processor.process_datasets(); processor.combine_datasets(); processor.preprocess_dataset()"
             ;;
         2)
             echo -e "\n${CYAN}Running Model Training...${NC}"
-            python -m src.main --train
+            python3.11 -m src.main --train
             ;;
         3)
             echo -e "\n${CYAN}Running Model Evaluation...${NC}"
-            python -m src.main --evaluate
+            python3.11 -m src.main --evaluate
             ;;
         4)
             echo -e "\n${CYAN}Generating Visualizations...${NC}"
-            python -m src.main --explain
+            python3.11 -m src.main --explain
             ;;
         5)
             echo -e "\n${CYAN}Running Complete Pipeline...${NC}"
-            python -m src.main --all
+            python3.11 -m src.main --all
             ;;
         6)
             echo -e "\n${YELLOW}Exiting...${NC}"

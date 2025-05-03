@@ -196,7 +196,7 @@ class TextFeatureExtractor(tf.keras.Model):
         concat_pooled = tf.concat([max_pool, avg_pool], axis=-1)
         
         # Final feature representation
-        features = self.output_dense(concat_pooled + concat_h)
+        features = self.output_dense(tf.concat([concat_pooled, concat_h], axis=-1))
         features = self.dropout(features, training=training)
         
         return features

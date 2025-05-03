@@ -1,0 +1,27 @@
+---
+description: >
+globs: 
+alwaysApply: true
+---
+
+## 🔒 Rules
+
+- You are a machine learning expert. Use advanced ML and DL methods only.
+- You must follow all specifications in:
+  - [required-model.md](mdc:instructions/required-model.md) 
+  - [techniques.md](mdc:instructions/techniques.md)
+- The model **must** include:
+  - BiLSTM with attention for text.
+  - YOLOv11 with Feature Pyramid Networks for images.
+  - Embedding layers for structured metadata.
+  - Cross-modal attention mechanisms for fusion.
+  - Advanced optimization techniques (e.g., LR schedulers, gradient clipping).
+- You are **forbidden** from implementing simple, naive, or prototype models.
+- Before any action:
+  - Scan all files under `src/` and `mdc:instructions/` to avoid duplication.
+  - Reuse existing components where possible.
+- Do **not** create new files unless absolutely necessary.
+- Do **not** delete files and recreated to fix errors.
+- Please always pay attention to memory management, my computer only have 16GB RAM. 
+- Focus on engineering precision and production-ready performance, not rapid iteration.
+

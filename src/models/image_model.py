@@ -66,7 +66,8 @@ class ChannelAttention(keras.layers.Layer):
         
     def call(self, inputs):
         # Get spatial dimensions
-        batch_size, height, width, channels = tf.shape(inputs)
+        shape = tf.shape(inputs)
+        batch_size, height, width, channels = shape[0], shape[1], shape[2], shape[3]
         
         # Global average pooling
         avg_pool = tf.reduce_mean(inputs, axis=[1, 2], keepdims=True)
@@ -350,7 +351,7 @@ class ImageFeatureExtractor(keras.Model):
             backbone_params: Additional configuration for the backbone
         """
         super().__init__()
-        self.input_shape = input_shape
+        self.img_input_shape = input_shape  # Changed from input_shape to img_input_shape
         self.backbone_name = backbone_type
         self.pretrained = pretrained
         self.output_dim = output_dim
@@ -394,7 +395,7 @@ class ImageFeatureExtractor(keras.Model):
             self.backbone = keras.applications.ResNet50(
                 include_top=False,
                 weights=weights,
-                input_shape=self.input_shape
+                input_shape=self.img_input_shape  # Changed from input_shape to img_input_shape
             )
             
             # Set trainable status
@@ -410,7 +411,7 @@ class ImageFeatureExtractor(keras.Model):
             self.backbone = keras.applications.EfficientNetB0(
                 include_top=False,
                 weights=weights,
-                input_shape=self.input_shape
+                input_shape=self.img_input_shape  # Changed from input_shape to img_input_shape
             )
             
             # Set trainable status
@@ -427,7 +428,7 @@ class ImageFeatureExtractor(keras.Model):
             use_fpn = self.backbone_params.get("use_fpn", True)
             
             self.backbone = YOLOv11Backbone(
-                input_shape=self.input_shape,
+                input_shape=self.img_input_shape,  # Changed from input_shape to img_input_shape
                 width_mult=width_mult,
                 depth_mult=depth_mult,
                 use_fpn=use_fpn,

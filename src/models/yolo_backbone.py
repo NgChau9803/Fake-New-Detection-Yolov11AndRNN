@@ -444,7 +444,7 @@ class YOLOv11Backbone(keras.Model):
             name: Name for the model
         """
         super().__init__(name=name)
-        self.input_shape = input_shape
+        self.yolo_input_shape = input_shape
         self.width_mult = width_mult
         self.depth_mult = depth_mult
         self.use_fpn = use_fpn
@@ -545,8 +545,10 @@ class YOLOv11Backbone(keras.Model):
         
         # Feature Pyramid Network
         if use_fpn:
+            # Use a fixed number of channels for all FPN levels (e.g., 384)
+            fpn_channels = 384
             self.fpn = FeaturePyramidNetwork(
-                filters=self.channels[2:5],
+                filters=[fpn_channels, fpn_channels, fpn_channels],
                 activation="silu"
             )
         

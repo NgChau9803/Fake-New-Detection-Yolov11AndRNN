@@ -345,19 +345,28 @@ class ModelTrainer:
         
         return optimizer
     
+    def _f1_metric(self):
+        # Robust F1 metric for binary classification
+        def f1(y_true, y_pred):
+            y_pred = tf.round(y_pred)
+            tp = tf.reduce_sum(tf.cast(y_true * y_pred, tf.float32))
+            fp = tf.reduce_sum(tf.cast((1 - y_true) * y_pred, tf.float32))
+            fn = tf.reduce_sum(tf.cast(y_true * (1 - y_pred), tf.float32))
+            precision = tp / (tp + fp + tf.keras.backend.epsilon())
+            recall = tp / (tp + fn + tf.keras.backend.epsilon())
+            f1 = 2 * precision * recall / (precision + recall + tf.keras.backend.epsilon())
+            return f1
+        return f1
+
     def _create_metrics(self):
         """Create metrics for model evaluation"""
         metrics = [
             'accuracy',
             keras.metrics.Precision(name='precision'),
             keras.metrics.Recall(name='recall'),
-            keras.metrics.AUC(name='auc')
+            keras.metrics.AUC(name='auc'),
+            self._f1_metric()
         ]
-        
-        # Add F1 score
-        f1_score = tfa.metrics.F1Score(num_classes=1, threshold=0.5)
-        metrics.append(f1_score)
-        
         return metrics
     
     def train(self, model, train_dataset, val_dataset, additional_callbacks=None):
