@@ -385,7 +385,7 @@ class ModelTrainer:
         # Compile the model
         model.compile(
             optimizer=optimizer,
-            loss='binary_crossentropy',
+            loss=model.loss,
             metrics=metrics
         )
         

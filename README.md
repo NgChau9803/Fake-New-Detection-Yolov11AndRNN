@@ -1,5 +1,18 @@
 # Multimodal Fake News Detection System
 
+**Quick Start (Recommended):**
+
+- Use the provided setup scripts for fully automated environment setup and running the pipeline:
+  - On Linux/macOS: `./setup_and_run.sh`
+  - On Windows: `./setup_and_run.ps1`
+- These scripts will:
+  - Create a Python 3.11 virtual environment
+  - Install all dependencies
+  - Create all necessary directories
+  - Provide an interactive menu to run all pipeline steps (preprocessing, training, evaluation, etc.)
+
+---
+
 A machine learning system for detecting fake news using multimodal analysis of text, images, and metadata.
 
 ## Project Overview
@@ -19,6 +32,25 @@ The system works with two primary datasets:
 2. **FakeNewsNet**: A comprehensive dataset containing news content from various domains (GossipCop, PolitiFact) with article text, images, and social context
 
 ## Installation and Setup
+
+### Automated Setup (Recommended)
+
+#### Linux/macOS
+```bash
+chmod +x setup_and_run.sh
+./setup_and_run.sh
+```
+
+#### Windows
+```powershell
+./setup_and_run.ps1
+```
+
+- The scripts will handle all environment setup, dependencies, and directory creation.
+- You do **not** need to manually create venvs or install requirements.
+
+### Manual Setup (Alternative)
+(Only if you cannot use the scripts)
 
 ### System Requirements
 
@@ -135,6 +167,9 @@ The system includes several memory optimization strategies:
 - Resource limiting to prevent crashes
 
 ## Troubleshooting
+
+If you get errors about Python version or venv creation, ensure Python 3.11 is installed and available as `python3.11` (Linux/macOS) or `py -3.11` (Windows).
+If you have issues with permissions, try running the script with `sudo` (Linux/macOS) or as Administrator (Windows).
 
 If you encounter memory issues:
 1. Reduce sample size with `--sample-size` option

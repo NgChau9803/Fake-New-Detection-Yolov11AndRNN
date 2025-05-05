@@ -14,6 +14,25 @@ from keras import metrics
 from logging import getLogger
 from .fusion_model import MultiModalFusionModel
 
+# Focal loss implementation
+# To set alpha/gamma for class imbalance, use config['loss']['alpha'] and config['loss']['gamma']
+# Example config:
+# loss:
+#   name: focal
+#   alpha: 0.85  # Increase for more weight on minority class
+#   gamma: 2.0
+
+def focal_loss(gamma=2., alpha=.25):
+    """
+    Focal loss for binary classification with adjustable alpha (class weight) and gamma (focusing parameter).
+    Set alpha high (e.g., 0.75-0.95) for aggressive minority class weighting.
+    """
+    def loss(y_true, y_pred):
+        bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+        bce_exp = tf.exp(-bce)
+        return alpha * (1 - bce_exp) ** gamma * bce
+    return loss
+
 # Optional TensorFlow Addons for F1Score
 try:
     from tensorflow_addons.metrics import F1Score
@@ -60,7 +79,11 @@ def create_model(config, vocab_size=None):
     # Advanced loss
     loss_config = config.get('loss', {})
     loss_name = loss_config.get('name', 'binary_crossentropy').lower()
-    if loss_name == 'binary_crossentropy':
+    if loss_name == 'focal':
+        gamma = loss_config.get('gamma', 2.0)
+        alpha = loss_config.get('alpha', 0.25)
+        loss = focal_loss(gamma=gamma, alpha=alpha)
+    elif loss_name == 'binary_crossentropy':
         loss = keras.losses.BinaryCrossentropy(
             from_logits=loss_config.get('from_logits', False),
             label_smoothing=loss_config.get('label_smoothing', 0.0)

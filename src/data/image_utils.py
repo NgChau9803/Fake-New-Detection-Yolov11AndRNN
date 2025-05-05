@@ -8,11 +8,15 @@ import cv2
 import traceback
 import hashlib
 from typing import Tuple, Dict, List, Any, Union
+from glob import glob
 
 def preprocess_image(image_path, target_size=(224, 224), normalize=True, 
                     add_preprocessing=True, grayscale=False, noise_removal=False):
     """
     Preprocess image for model input with advanced techniques and robust error handling
+    - Converts palette images (P/PA) to RGBA
+    - Converts all other non-RGB images to RGB
+    - Handles truncated/corrupted files gracefully
     
     Args:
         image_path (str): Path to the image
@@ -33,14 +37,23 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
         # Try to open the image
         try:
             img = Image.open(image_path)
-            
+            # Fix for palette images with transparency (P/PA mode)
+            if img.mode in ('P', 'PA'):
+                img = img.convert('RGBA')
+            # Convert all other non-RGB(A) images to RGB
+            elif img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGB')
             # Check if image is corrupted
             try:
                 img.verify()
                 # Need to reopen after verify
                 img = Image.open(image_path)
+                if img.mode in ('P', 'PA'):
+                    img = img.convert('RGBA')
+                elif img.mode not in ('RGB', 'RGBA'):
+                    img = img.convert('RGB')
             except Exception as e:
-                print(f"Warning: Image {image_path} is corrupted: {e}")
+                print(f"Warning: Image {image_path} is corrupted or truncated: {e}")
                 return np.zeros((*target_size, 3 if not grayscale else 1), dtype=np.float32)
         except Exception as e:
             print(f"Error opening image {image_path}: {e}")
@@ -52,9 +65,7 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
             # Convert back to RGB but with grayscale content
             if not isinstance(target_size, tuple) or len(target_size) < 3 or target_size[2] == 3:
                 img = img.convert('RGB')
-        # Otherwise ensure RGB
-        elif not grayscale and img.mode != 'RGB':
-            img = img.convert('RGB')
+        # Otherwise ensure RGB or RGBA (already handled above)
         
         # Apply noise removal if specified
         if noise_removal:
@@ -71,6 +82,12 @@ def preprocess_image(image_path, target_size=(224, 224), normalize=True,
         
         # Convert to numpy array with explicit float32 dtype
         img_array = np.array(new_img, dtype=np.float32)
+        # If image has 4 channels (RGBA), drop alpha channel to ensure RGB
+        if img_array.ndim == 3 and img_array.shape[-1] == 4:
+            # print(f"Warning: Image {image_path} has 4 channels (RGBA); dropping alpha channel.")
+            img_array = img_array[..., :3]
+        # Assert output shape is (H, W, 3)
+        assert img_array.shape == (*target_size, 3), f"Image shape is {img_array.shape}, expected ({target_size[0]}, {target_size[1]}, 3) for {image_path}"
         
         # Normalize if specified
         if normalize:
@@ -560,3 +577,37 @@ def get_image_hash(image_path):
         print(f"Error calculating image hash: {e}")
         # Fallback to just the path hash
         return hashlib.md5(str(image_path).encode()).hexdigest() 
+
+# --- Utility: Scan for corrupted/truncated and palette images ---
+def scan_images_for_issues(image_dir, recursive=True):
+    """
+    Scan all images in a directory for corruption/truncation and palette mode.
+    Prints a summary of problematic files.
+    Usage:
+        from src.data.image_utils import scan_images_for_issues
+        scan_images_for_issues('data/images')
+    """
+    pattern = '**/*.*' if recursive else '*.*'
+    image_paths = glob(os.path.join(image_dir, pattern), recursive=recursive)
+    bad_files = []
+    palette_files = []
+    for img_path in image_paths:
+        try:
+            with Image.open(img_path) as img:
+                img.verify()
+                if img.mode in ('P', 'PA'):
+                    palette_files.append(img_path)
+        except Exception as e:
+            print(f'[CORRUPT] {img_path} ({e})')
+            bad_files.append(img_path)
+    print(f'\nScan complete. Found {len(bad_files)} corrupted/truncated images.')
+    if bad_files:
+        print('Corrupted/Truncated files:')
+        for f in bad_files:
+            print(f'  {f}')
+    print(f'Found {len(palette_files)} palette images (P/PA mode).')
+    if palette_files:
+        print('Palette images:')
+        for f in palette_files:
+            print(f'  {f}')
+    return bad_files, palette_files 

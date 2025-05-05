@@ -1,18 +1,48 @@
 # PowerShell Script to set up and run the Fake News Detection System
 
+# Check for Python 3.11
+$python = Get-Command python -ErrorAction SilentlyContinue
+$py311 = Get-Command py -ErrorAction SilentlyContinue
+$hasPy311 = $false
+if ($py311) {
+    $ver = py -3.11 --version 2>$null
+    if ($ver -match 'Python 3.11') { $hasPy311 = $true }
+}
+if (-not $hasPy311 -and $python) {
+    $ver = python --version 2>$null
+    if ($ver -match '3.11') { $hasPy311 = $true }
+}
+if (-not $hasPy311) {
+    Write-Host "Python 3.11 is required but not found. Please install Python 3.11 and try again." -ForegroundColor Red
+    exit 1
+}
+
 # Set up virtual environment (if not already created)
 if (-Not (Test-Path ".\.venv")) {
     Write-Host "Creating Python 3.11 virtual environment..." -ForegroundColor Green
     py -3.11 -m venv .venv
+    if (-Not (Test-Path ".\.venv")) {
+        Write-Host "Failed to create virtual environment. Ensure Python 3.11 and venv are installed." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Activate virtual environment
 Write-Host "Activating virtual environment..." -ForegroundColor Green
-& .\.venv\Scripts\Activate.ps1
+try {
+    & .\.venv\Scripts\Activate.ps1
+} catch {
+    Write-Host "Failed to activate virtual environment. Try '.\.venv\Scripts\Activate.ps1' manually." -ForegroundColor Red
+    exit 1
+}
+
+# Upgrade pip
+Write-Host "Upgrading pip..." -ForegroundColor Green
+python -m pip install --upgrade pip
 
 # Install dependencies
 Write-Host "Installing dependencies from requirements.txt..." -ForegroundColor Green
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 # Create necessary directories
 Write-Host "Creating necessary directories..." -ForegroundColor Green
@@ -91,10 +121,12 @@ function Run-Option {
 }
 
 # Main execution
+Write-Host "To rerun this menu, use ./setup_and_run.ps1" -ForegroundColor Cyan
+
 do {
     Show-Menu
     $choice = Read-Host
-    if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le 6) {
+    if ($choice -match '^[1-6]$') {
         Run-Option -Option ([int]$choice)
         if ([int]$choice -eq 6) { break }
     } else {

@@ -9,6 +9,8 @@ except ImportError:
 from src.models.text_model import TextFeatureExtractor
 from src.models.image_model import ImageFeatureExtractor
 import numpy as np
+import os
+import json
 
 class MultiModalFusionModel(tf.keras.Model):
     def __init__(self, vocab_size, config):
@@ -177,6 +179,31 @@ class MultiModalFusionModel(tf.keras.Model):
         # Store attention weights for visualization if needed
         self.attention_weights = None
         
+        # --- Categorical metadata embedding sizes ---
+        # Try to load vocab sizes from disk if available
+        processed_dir = config['data']['processed_dir'] if 'processed_dir' in config['data'] else 'data/processed'
+        vocab_dir = os.path.join(processed_dir, 'vocabs')
+        def load_vocab_size(name):
+            try:
+                with open(os.path.join(vocab_dir, f'{name}_vocab.json'), 'r') as f:
+                    vocab = json.load(f)
+                size = len(vocab)
+                if size == 0:
+                    print(f"Warning: {name}_vocab.json is empty. Setting vocab size to 1.")
+                    return 1
+                return size
+            except Exception:
+                print(f"Warning: Could not load {name}_vocab.json. Using fallback size 1.")
+                return 1  # fallback
+        self.source_vocab_size = max(1, load_vocab_size('source'))
+        self.subreddit_vocab_size = max(1, load_vocab_size('subreddit'))
+        self.author_vocab_size = max(1, load_vocab_size('author'))
+        self.categorical_embedding_dim = config['model']['fusion'].get('categorical_embedding_dim', 32)
+        # Embedding layers for categorical metadata
+        self.source_embedding = tf.keras.layers.Embedding(self.source_vocab_size, self.categorical_embedding_dim, mask_zero=True, name='source_embedding')
+        self.subreddit_embedding = tf.keras.layers.Embedding(self.subreddit_vocab_size, self.categorical_embedding_dim, mask_zero=True, name='subreddit_embedding')
+        self.author_embedding = tf.keras.layers.Embedding(self.author_vocab_size, self.categorical_embedding_dim, mask_zero=True, name='author_embedding')
+        
     def _create_projection_layer(self, dim):
         """Helper function to create projection layers with optional spectral normalization"""
         if self.use_spectral_norm:
@@ -214,16 +241,25 @@ class MultiModalFusionModel(tf.keras.Model):
         # Process image input
         image_features = self.image_extractor(inputs['image'], training=training)
         
+        # Categorical metadata embeddings
+        source_emb = self.source_embedding(inputs['source_idx'])
+        subreddit_emb = self.subreddit_embedding(inputs['subreddit_idx'])
+        author_emb = self.author_embedding(inputs['author_idx'])
+        # Concatenate all categorical embeddings
+        cat_emb = tf.concat([source_emb, subreddit_emb, author_emb], axis=-1)
+        
         # Process metadata
         metadata = inputs['metadata']
         metadata_features = self.metadata_dense1(metadata)
         metadata_features = self.metadata_dense2(metadata_features)
         metadata_features = self.metadata_norm(metadata_features)
+        # Concatenate dense metadata and categorical embeddings
+        metadata_all = tf.concat([metadata_features, cat_emb], axis=-1)
         
         # Project features to the same dimension
         text_features = self.text_feature_norm(text_features)
         image_features = self.image_feature_norm(image_features)
-        metadata_features = self.metadata_feature_norm(metadata_features)
+        metadata_features = self.metadata_feature_norm(metadata_all)
         
         # Apply fusion based on selected method
         if self.fusion_method == 'concat':

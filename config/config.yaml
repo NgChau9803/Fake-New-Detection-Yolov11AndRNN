@@ -44,6 +44,14 @@ data:
     # Path to json file in each article directory
     news_content_file: "news content.json"
 
+  allow_synthetic_images: false
+  num_parallel_calls: 2
+  prefetch_buffer_size: 2
+
+  # --- AGGRESSIVE IMBALANCE HANDLING (recommended for low recall/minority class) ---
+  balanced_sampling: true  # Enable advanced class balancing
+  sampling_strategy: oversample  # Options: oversample, downsample, both (default: oversample)
+
 # Model configuration
 model:
   # Text model configuration
@@ -95,6 +103,12 @@ training:
   gradient_clip_norm: 1.0
   gradient_accumulation_steps: 1
   use_mixed_precision: true
+
+# Loss configuration
+loss:
+  name: focal
+  gamma: 2.0
+  alpha: 0.39  # Set to minority class (class 1) proportion for best recall (class 0: 0.61, class 1: 0.39)
 
 # Evaluation configuration
 evaluation:

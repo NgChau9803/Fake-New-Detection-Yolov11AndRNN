@@ -222,17 +222,17 @@ class ImageProcessor:
         return np.array(processed_images)
         
     @staticmethod
-    def create_tf_dataset(images, labels=None, batch_size=32, shuffle=True, augment=False):
+    def create_tf_dataset(images, labels=None, batch_size=32, shuffle=True, augment=False, num_parallel_calls=2, prefetch_buffer_size=2):
         """
-        Create a TensorFlow dataset from images and labels
-        
+        Create a TensorFlow dataset from images and labels (memory-optimized: no .cache, small prefetch)
         Args:
             images: Numpy array of images
             labels: Numpy array of labels (optional)
             batch_size: Batch size
             shuffle: Whether to shuffle the data
             augment: Whether to apply data augmentation
-            
+            num_parallel_calls: Number of parallel calls for map
+            prefetch_buffer_size: Prefetch buffer size
         Returns:
             TensorFlow dataset
         """
@@ -240,23 +240,19 @@ class ImageProcessor:
             dataset = tf.data.Dataset.from_tensor_slices((images, labels))
         else:
             dataset = tf.data.Dataset.from_tensor_slices(images)
-            
         if shuffle:
             dataset = dataset.shuffle(buffer_size=len(images))
-            
         if augment and labels is not None:
-            # Add augmentation using tf.image operations
             def augment_map_fn(x, y):
                 x = tf.image.random_flip_left_right(x)
                 x = tf.image.random_brightness(x, 0.2)
                 x = tf.image.random_contrast(x, 0.8, 1.2)
                 return x, y
-                
-            dataset = dataset.map(augment_map_fn, num_parallel_calls=tf.data.AUTOTUNE)
-            
+            dataset = dataset.map(augment_map_fn, num_parallel_calls=num_parallel_calls)
         dataset = dataset.batch(batch_size)
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        
+        # Remove .cache() for memory efficiency
+        dataset = dataset.prefetch(prefetch_buffer_size)
+        # Document: .cache() removed for memory efficiency; prefetch buffer is small and configurable
         return dataset
 
 

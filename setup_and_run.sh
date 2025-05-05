@@ -8,6 +8,12 @@ RED='\033[0;31m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
+# Check for Python 3.11
+if ! command -v python3.11 &> /dev/null; then
+    echo -e "${RED}Python 3.11 is required but not found. Please install Python 3.11 and try again.${NC}"
+    exit 1
+fi
+
 # Function to create directories
 create_directories() {
     echo -e "${GREEN}Creating necessary directories...${NC}"
@@ -36,13 +42,24 @@ setup_venv() {
     if [ ! -d "venv" ]; then
         echo -e "${GREEN}Creating Python 3.11 virtual environment...${NC}"
         python3.11 -m venv venv
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Failed to create virtual environment. Ensure python3.11-venv is installed.${NC}"
+            exit 1
+        fi
     fi
     
     echo -e "${GREEN}Activating virtual environment...${NC}"
     source venv/bin/activate
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Failed to activate virtual environment. Try 'source venv/bin/activate' manually.${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}Upgrading pip...${NC}"
+    python3.11 -m pip install --upgrade pip
     
     echo -e "${GREEN}Installing dependencies from requirements.txt...${NC}"
-    pip install -r requirements.txt
+    python3.11 -m pip install -r requirements.txt
 }
 
 # Check if src directory exists
@@ -120,6 +137,7 @@ main() {
         echo -e "\n${GREEN}Press Enter to continue...${NC}"
         read
     done
+    echo -e "${CYAN}To rerun this menu, use ./setup_and_run.sh${NC}"
 }
 
 # Run the main function

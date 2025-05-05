@@ -1,6 +1,15 @@
 # Fake News Detection System - Setup Guide
 
-This guide provides step-by-step instructions for setting up and running the Multimodal Fake News Detection System.
+**Quick Start:**
+
+- For most users, just run `./setup_and_run.sh` (Linux/macOS) or `./setup_and_run.ps1` (Windows).
+- These scripts will automatically:
+  - Create a Python 3.11 virtual environment
+  - Install all dependencies
+  - Create all required directories
+  - Provide an interactive menu for all pipeline steps
+
+---
 
 ## System Requirements
 
@@ -9,65 +18,38 @@ This guide provides step-by-step instructions for setting up and running the Mul
 - At least 16GB of RAM (24GB+ recommended)
 - GPU support is optional but recommended for faster training
 
-## Installation
-
-### Windows
-
-1. Install Python 3.11 from the [official website](https://www.python.org/downloads/release/python-3116/).
-
-2. Clone or download this repository to your local machine.
-
-3. Open PowerShell and navigate to the project directory:
-   ```
-   cd path\to\FinalProject
-   ```
-
-4. Run the setup script:
-   ```
-   .\setup_and_run.ps1
-   ```
-
-   This script will:
-   - Create a Python virtual environment using Python 3.11
-   - Install all required dependencies
-   - Create necessary directories
-   - Provide an interactive menu to run the pipeline
+## Automated Installation (Recommended)
 
 ### Linux/macOS
 
-1. Install Python 3.11 if not already installed:
-   
-   On Ubuntu/Debian:
+1. Ensure Python 3.11 is installed:
    ```
+   python3.11 --version
+   # If not found, install as follows:
    sudo apt update
    sudo apt install python3.11 python3.11-venv python3.11-dev
-   ```
-   
-   On macOS (using Homebrew):
-   ```
+   # Or on macOS:
    brew install python@3.11
    ```
-
-2. Clone or download this repository to your local machine.
-
-3. Open Terminal and navigate to the project directory:
-   ```
-   cd path/to/FinalProject
-   ```
-
-4. Make the setup script executable:
+2. Make the setup script executable and run it:
    ```
    chmod +x setup_and_run.sh
-   ```
-
-5. Run the setup script:
-   ```
    ./setup_and_run.sh
    ```
 
-## Manual Setup (Alternative)
+### Windows
 
-If you prefer to set up manually instead of using the scripts:
+1. Ensure Python 3.11 is installed and available as `py -3.11`.
+2. Run the setup script in PowerShell:
+   ```
+   ./setup_and_run.ps1
+   ```
+
+- The script will handle all environment setup, dependencies, and directory creation.
+- You do **not** need to manually create venvs or install requirements.
+
+## Manual Setup (Alternative)
+(Only if you cannot use the scripts)
 
 1. Create a virtual environment:
    ```
@@ -79,12 +61,10 @@ If you prefer to set up manually instead of using the scripts:
    python3.11 -m venv .venv
    source .venv/bin/activate
    ```
-
 2. Install dependencies:
    ```
    pip install -r requirements.txt
    ```
-
 3. Create necessary directories:
    ```
    mkdir -p data/raw data/processed data/images data/cache logs/tensorboard models explanations config
@@ -206,6 +186,10 @@ The system can be configured by editing the `config/config.yaml` file. Key confi
 - Output paths
 
 ## Troubleshooting
+
+- If you get errors about Python version or venv creation, ensure Python 3.11 is installed and available as `python3.11` (Linux/macOS) or `py -3.11` (Windows).
+- If you have issues with permissions, try running the script with `sudo` (Linux/macOS) or as Administrator (Windows).
+- If venv activation fails, try activating manually: `source venv/bin/activate` (Linux/macOS) or `.\.venv\Scripts\Activate.ps1` (Windows).
 
 ### Common Issues
 

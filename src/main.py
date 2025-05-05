@@ -120,7 +120,11 @@ def load_config(config_path):
     return config
 
 def process_datasets(config):
-    """Process and prepare datasets"""
+    """Process and prepare datasets (now memory-optimized: no .cache, small prefetch, batch size warning)"""
+    # Log memory-relevant config
+    logger.info(f"Batch size: {config['training'].get('batch_size', 32)}")
+    logger.info(f"num_parallel_calls: {config['data'].get('num_parallel_calls', 2)}")
+    logger.info(f"prefetch_buffer_size: {config['data'].get('prefetch_buffer_size', 2)}")
     logger.info("Initializing dataset processor...")
     dataset_processor = DatasetProcessor(config)
     
@@ -153,12 +157,14 @@ def process_datasets(config):
     logger.info("Creating TensorFlow datasets...")
     try:
         train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
-        
         logger.info(f"Dataset processing complete: {len(word_index)} unique tokens in vocabulary")
-        logger.info(f"Train dataset size: {tf.data.experimental.cardinality(train_dataset).numpy()}")
-        logger.info(f"Validation dataset size: {tf.data.experimental.cardinality(val_dataset).numpy()}")
-        logger.info(f"Test dataset size: {tf.data.experimental.cardinality(test_dataset).numpy()}")
-        
+        # Log dataset sizes robustly
+        for name, ds in [('Train', train_dataset), ('Validation', val_dataset), ('Test', test_dataset)]:
+            size = tf.data.experimental.cardinality(ds).numpy()
+            if size < 0:
+                logger.warning(f"{name} dataset cardinality is unknown (value={size}). This is expected for generator-based datasets. If you want the true size, check the DataFrame split size before creating the dataset.")
+            else:
+                logger.info(f"{name} dataset size: {size}")
         return {
             'train_dataset': train_dataset,
             'val_dataset': val_dataset,
@@ -167,7 +173,8 @@ def process_datasets(config):
         }
     except Exception as e:
         logger.error(f"Error creating TensorFlow datasets: {e}")
-        raise
+        logger.error("Aborting pipeline due to dataset creation failure.")
+        sys.exit(1)
 
 def build_model(config, vocab_size):
     """Build the multi-modal fusion model"""
@@ -180,9 +187,19 @@ def build_model(config, vocab_size):
     dummy_text = tf.zeros((1, config['data']['max_text_length']), dtype=tf.int32)
     dummy_image = tf.zeros((1, *config['model']['image']['input_shape']), dtype=tf.float32)
     dummy_metadata = tf.zeros((1, 10), dtype=tf.float32)
+    dummy_source_idx = tf.zeros((1,), dtype=tf.int32)
+    dummy_subreddit_idx = tf.zeros((1,), dtype=tf.int32)
+    dummy_author_idx = tf.zeros((1,), dtype=tf.int32)
     
     # Forward pass to build model
-    _ = model({'text': dummy_text, 'image': dummy_image, 'metadata': dummy_metadata})
+    _ = model({
+        'text': dummy_text,
+        'image': dummy_image,
+        'metadata': dummy_metadata,
+        'source_idx': dummy_source_idx,
+        'subreddit_idx': dummy_subreddit_idx,
+        'author_idx': dummy_author_idx
+    })
     
     # Print model summary
     model.summary(print_fn=logger.info)
@@ -327,7 +344,11 @@ def main():
         if datasets is None:
             logger.info("Loading pre-processed datasets...")
             dataset_processor = DatasetProcessor(config)
-            train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
+            try:
+                train_dataset, val_dataset, test_dataset, word_index, max_token_index = dataset_processor.create_tf_dataset()
+            except Exception as e:
+                logger.error(f"Failed to create datasets: {e}")
+                sys.exit(1)
             datasets = {
                 'train_dataset': train_dataset,
                 'val_dataset': val_dataset,

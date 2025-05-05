@@ -21,6 +21,7 @@ from nltk.tokenize import word_tokenize
 from PIL import Image, ImageDraw, ImageFont
 import gc
 import psutil
+import ast
 
 # Import utility functions
 from src.utils.text_utils import TextProcessor
@@ -95,6 +96,12 @@ class DatasetProcessor:
         
         # Initialize tokenizer information
         self.word_index = None
+        self.allow_synthetic_images = config['data'].get('allow_synthetic_images', True)
+        # For categorical vocabularies
+        self.source_vocab = {}
+        self.subreddit_vocab = {}
+        self.author_vocab = {}
+        self._vocab_ready = False
         
     def get_fakeddit_image_path(self, article_id, images_dir):
         """
@@ -107,55 +114,17 @@ class DatasetProcessor:
         Returns:
             list: List of possible image paths
         """
-        # In Fakeddit, the image name is the article ID with jpg extension
         image_paths = []
-        
-        # Try direct path first
-        standard_path = os.path.join(images_dir, f"{article_id}.jpg")
-        if os.path.exists(standard_path):
-            print(f"Found Fakeddit image: {standard_path}")
-            image_paths.append(standard_path)
-            return image_paths
-            
-        # Try multiple extensions and path formats
-        extensions = ['jpg', 'png', 'jpeg', 'gif', 'webp']
-        
-        # Try with different extensions
-        for ext in extensions:
-            # Try path as is
+        # Only use the actual folder structure
+        for ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
             path = os.path.join(images_dir, f"{article_id}.{ext}")
             if os.path.exists(path):
-                print(f"Found Fakeddit image with ext {ext}: {path}")
                 image_paths.append(path)
                 return image_paths
-        
-        # Try alternative locations if main location fails
-        alt_locations = [
-            "data/images/fakeddit/public_image_set",
-            "data/raw/fakeddit/public_image_set",
-            "data/fakeddit/public_image_set",
-        ]
-        
-        for location in alt_locations:
-            if os.path.exists(location):
-                for ext in extensions:
-                    path = os.path.join(location, f"{article_id}.{ext}")
-                    if os.path.exists(path):
-                        print(f"Found Fakeddit image in alt location: {path}")
-                        image_paths.append(path)
-                        return image_paths
-        
-        # Print debug info if no path was found
-        if not image_paths:
-            logger.warning(f"No image found for Fakeddit article {article_id} in {images_dir}")
-            # Check if the directory exists
-            if not os.path.exists(images_dir):
-                logger.warning(f"  Warning: Images directory {images_dir} does not exist")
-            else:
-                # Get sample of files in the images directory
-                files = os.listdir(images_dir)[:5] if os.path.exists(images_dir) and os.listdir(images_dir) else []
-                logger.info(f"  Sample files in {images_dir}: {files}")
-        
+        # Log missing image
+        missing_log = os.path.join('logs', 'missing_images.log')
+        with open(missing_log, 'a') as f:
+            f.write(f"Missing Fakeddit image: {article_id} in {images_dir}\n")
         return image_paths
         
     def process_datasets(self):
@@ -685,7 +654,7 @@ class DatasetProcessor:
                         try:
                             cleaned = preprocess_text(
                                 batch.loc[idx, 'text'],
-                                max_length=self.max_text_length,
+                max_length=self.max_text_length,
                                 remove_stopwords=True,
                                 use_lemmatization=True,
                                 use_stemming=False,
@@ -720,9 +689,8 @@ class DatasetProcessor:
         return df
     
     def _process_image_path(self, row):
-        """Process image paths and find valid images"""
+        """Process image paths and find valid images, with strict real image handling."""
         img_path = None
-        # Track which dataset source we're processing
         dataset_source = row.get('dataset_source', '')
         article_id = row.get('id', '')
         # First check if we have a single image_path (from Fakeddit)
@@ -733,8 +701,7 @@ class DatasetProcessor:
         # If direct path doesn't exist but it's Fakeddit, try to find it using the helper function
         if dataset_source == 'fakeddit' and 'id' in row:
             article_id = row['id']
-            # Check specific path for Fakeddit
-            fakeddit_images_dir = "data/images/fakeddit/public_image_set"
+            fakeddit_images_dir = self.config['data']['fakeddit']['images_dir']
             if os.path.exists(fakeddit_images_dir):
                 fakeddit_paths = self.get_fakeddit_image_path(article_id, fakeddit_images_dir)
                 if fakeddit_paths:
@@ -742,25 +709,19 @@ class DatasetProcessor:
         # If no valid image_path, try image_paths (from FakeNewsNet)
         if 'image_paths' in row and pd.notna(row['image_paths']):
             image_paths = row['image_paths']
-            # Handle if image_paths is a string (from CSV loading)
             if isinstance(image_paths, str):
                 try:
-                    # Try to load as JSON if it's a string representation of a list
                     if image_paths.startswith('[') and image_paths.endswith(']'):
                         image_paths = json.loads(image_paths.replace("'", '"'))
-                        # Now we have a list, check each path
                         for img_path in image_paths:
                             if isinstance(img_path, str) and os.path.exists(img_path):
                                 return img_path
                     else:
-                        # Single path as string
                         if os.path.exists(image_paths):
                             return image_paths
                 except Exception as e:
-                    # If it's not valid JSON but a single path
                     if os.path.exists(image_paths):
                         return image_paths
-            # Handle if image_paths is already a list
             elif isinstance(image_paths, list):
                 for img_path in image_paths:
                     if isinstance(img_path, str) and os.path.exists(img_path):
@@ -772,22 +733,22 @@ class DatasetProcessor:
                 if '_' in article_id:
                     source, article_id = article_id.split('_', 1)
                     label = 'fake' if row.get('label', 0) == 1 else 'real'
-                    fnn_paths = self.get_fakenewsnet_image_paths(article_id, source, label, os.path.join(self.images_dir, 'fakenewsnet'))
+                    fnn_images_dir = self.config['data']['fakenewsnet']['images_dir']
+                    fnn_paths = []
+                    article_img_dir = os.path.join(fnn_images_dir, source, label, article_id)
+                    if os.path.exists(article_img_dir):
+                        for filename in os.listdir(article_img_dir):
+                            file_path = os.path.join(article_img_dir, filename)
+                            if os.path.isfile(file_path) and file_path.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                                fnn_paths.append(file_path)
                     if fnn_paths:
                         return fnn_paths[0]
             except Exception as e:
                 pass
-        # If we get here, no valid image was found - use synthetic images if available
-        if hasattr(self, 'synthetic_dir') and os.path.exists(self.synthetic_dir):
-            # Get a deterministic synthetic image based on the article ID
-            synthetic_files = [f for f in os.listdir(self.synthetic_dir) if f.endswith('.jpg')]
-            if synthetic_files:
-                # Use hash of article ID to deterministically select a synthetic image
-                import hashlib
-                hash_val = int(hashlib.md5(str(article_id).encode()).hexdigest(), 16)
-                synthetic_idx = hash_val % len(synthetic_files)
-                synthetic_path = os.path.join(self.synthetic_dir, synthetic_files[synthetic_idx])
-                return synthetic_path
+        # If we get here, no valid image was found
+        missing_log = os.path.join('logs', 'missing_images.log')
+        with open(missing_log, 'a') as f:
+            f.write(f"Missing image for article {article_id} in dataset {dataset_source}\n")
         return None
     
     def combine_datasets(self):
@@ -846,7 +807,7 @@ class DatasetProcessor:
         return combined_df
     
     def apply_balanced_sampling(self, df):
-        """Apply balanced sampling to handle class imbalance"""
+        """Apply balanced sampling to handle class imbalance (supports oversampling and downsampling)"""
         if not self.balanced_sampling:
             return df
         
@@ -854,37 +815,67 @@ class DatasetProcessor:
         
         # Get counts for each class
         label_counts = df['label'].value_counts()
-        
-        # Determine the number of samples to use (use the size of the smallest class for balance)
         min_class_size = label_counts.min()
+        max_class_size = label_counts.max()
         balanced_samples = []
         
+        # Configurable strategy: 'oversample', 'downsample', or 'both'
+        sampling_strategy = self.config['data'].get('sampling_strategy', 'oversample')
+        print(f"Sampling strategy: {sampling_strategy}")
+        
         for label, count in label_counts.items():
-            # If this class has more samples than we need, downsample
             class_df = df[df['label'] == label]
-            if count > min_class_size:
-                # Downsample this class
-                downsampled = resample(
-                    class_df,
-                    replace=False,
-                    n_samples=min_class_size,
-                    random_state=42
-                )
-                balanced_samples.append(downsampled)
+            if sampling_strategy == 'downsample':
+                # Downsample majority class to min_class_size
+                if count > min_class_size:
+                    sampled = resample(
+                        class_df,
+                        replace=False,
+                        n_samples=min_class_size,
+                        random_state=42
+                    )
+                else:
+                    sampled = class_df
+            elif sampling_strategy == 'oversample':
+                # Oversample minority class to max_class_size
+                if count < max_class_size:
+                    sampled = resample(
+                        class_df,
+                        replace=True,
+                        n_samples=max_class_size,
+                        random_state=42
+                    )
+                else:
+                    sampled = class_df
+            elif sampling_strategy == 'both':
+                # Downsample majority, oversample minority to mean size
+                target_size = int(label_counts.mean())
+                if count > target_size:
+                    sampled = resample(
+                        class_df,
+                        replace=False,
+                        n_samples=target_size,
+                        random_state=42
+                    )
+                elif count < target_size:
+                    sampled = resample(
+                        class_df,
+                        replace=True,
+                        n_samples=target_size,
+                        random_state=42
+                    )
+                else:
+                    sampled = class_df
             else:
-                # Keep all samples for this class
-                balanced_samples.append(class_df)
+                sampled = class_df
+            balanced_samples.append(sampled)
         
-        # Combine all balanced classes
         balanced_df = pd.concat(balanced_samples, ignore_index=True)
-        
         print(f"Balanced dataset size: {len(balanced_df)} records")
-        # Print label distribution
         label_counts = balanced_df['label'].value_counts()
         print("Label distribution after balancing:")
         for label, count in label_counts.items():
             print(f"  Label {label}: {count} records ({count/len(balanced_df)*100:.2f}%)")
-        
         return balanced_df
     
     def _get_cache_path(self, dataset_hash):
@@ -926,11 +917,18 @@ class DatasetProcessor:
                 raise FileNotFoundError(f"Preprocessed dataset not found at {preprocessed_path}")
             print(f"Loading preprocessed dataset from {preprocessed_path}")
             df = pd.read_csv(preprocessed_path, low_memory=False)
-
+        
         # 2. Drop rows with missing labels or text
         df = df[df['label'].notna() & df['clean_text'].notna() & df['clean_text'].str.strip().ne('')]
         df = df.reset_index(drop=True)
         print(f"Dataset size after dropping missing: {len(df)}")
+
+        # Always apply balanced sampling if enabled in config
+        if self.balanced_sampling:
+            df = self.apply_balanced_sampling(df)
+
+        # Rebuild categorical vocabs on the full DataFrame to ensure all categories are included
+        self._build_categorical_vocabs(df)
 
         # 3. Split into train/val/test
         train_ratio = self.train_ratio
@@ -1062,26 +1060,48 @@ class DatasetProcessor:
                             metadata_vec[9] = np.float32(min(len(metadata['authors']) / 5.0, 1.0))
                     except Exception as e:
                         pass
+                    # Categorical indices
+                    if not self._vocab_ready:
+                        self._build_categorical_vocabs(df_split)
+                    source_idx, subreddit_idx, author_idx = self._map_categorical_indices(row)
+                    # Ensure indices are in range for their vocab size; fallback to <UNK> (0) if not
+                    if source_idx >= len(self.source_vocab):
+                        source_idx = self.source_vocab.get('<UNK>', 0)
+                    if subreddit_idx >= len(self.subreddit_vocab):
+                        subreddit_idx = self.subreddit_vocab.get('<UNK>', 0)
+                    if author_idx >= len(self.author_vocab):
+                        author_idx = self.author_vocab.get('<UNK>', 0)
                     yield (
                         {
                             'text': seq,
                             'image_path': image_path,
-                            'metadata': metadata_vec
+                            'metadata': metadata_vec,
+                            'source_idx': source_idx,
+                            'subreddit_idx': subreddit_idx,
+                            'author_idx': author_idx
                         },
                         label
                     )
             output_signature = (
-                {
+                    {
                     'text': tf.TensorSpec(shape=(max_len,), dtype=tf.int32),
                     'image_path': tf.TensorSpec(shape=(), dtype=tf.string),
-                    'metadata': tf.TensorSpec(shape=(10,), dtype=tf.float32)
-                },
+                    'metadata': tf.TensorSpec(shape=(10,), dtype=tf.float32),
+                    'source_idx': tf.TensorSpec(shape=(), dtype=tf.int32),
+                    'subreddit_idx': tf.TensorSpec(shape=(), dtype=tf.int32),
+                    'author_idx': tf.TensorSpec(shape=(), dtype=tf.int32)
+                    },
                 tf.TensorSpec(shape=(), dtype=tf.float32)
-            )
+                )
             ds = tf.data.Dataset.from_generator(generator, output_signature=output_signature)
             if shuffle_split:
                 ds = ds.shuffle(buffer_size=min(10000, len(df_split)), seed=random_seed)
             batch_size = self.config['training'].get('batch_size', 32)
+            # Warn if batch size is too large for available RAM
+            import psutil
+            available_gb = psutil.virtual_memory().available / (1024**3)
+            if batch_size * 224 * 224 * 3 * 4 / (1024**3) > available_gb * 0.5:
+                logger.warning(f"Batch size {batch_size} may be too large for available RAM ({available_gb:.2f} GB)")
             ds = ds.batch(batch_size)
             # Map to load and preprocess images
             def load_and_preprocess_image(features, label):
@@ -1104,8 +1124,13 @@ class DatasetProcessor:
                 label = tf.reshape(label, [-1])
                 tf.print('DEBUG: label shape', tf.shape(label), 'dtype', label.dtype)
                 return features, label
-            ds = ds.map(load_and_preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
-            ds = ds.cache().prefetch(tf.data.AUTOTUNE)
+            # Use config for num_parallel_calls and prefetch buffer size
+            num_parallel_calls = self.config['data'].get('num_parallel_calls', 2)
+            prefetch_buffer_size = self.config['data'].get('prefetch_buffer_size', 2)
+            ds = ds.map(load_and_preprocess_image, num_parallel_calls=num_parallel_calls)
+            # Remove .cache() to avoid excessive RAM usage
+            ds = ds.prefetch(prefetch_buffer_size)
+            # Document: .cache() removed for memory efficiency; prefetch buffer is small and configurable
             return ds
         # 6. Create datasets
         train_dataset = make_tf_dataset(train_df, shuffle_split=True, vocab_size=max_token_index+1)
@@ -1229,12 +1254,17 @@ class DatasetProcessor:
         image_features = np.zeros(image_shape, dtype=np.float32)
         
         has_valid_image = False
+        image_loading_log = os.path.join('logs', 'image_loading_errors.log')
+        def log_image_error(msg):
+            print(msg)
+            with open(image_loading_log, 'a') as f:
+                f.write(msg + '\n')
         
         if pd.notna(row.get('processed_image_path', None)) and os.path.exists(str(row['processed_image_path'])):
             # Check file permissions before processing
             img_path = str(row['processed_image_path'])
             if not os.access(img_path, os.R_OK):
-                print(f"Warning: No read permission for image {img_path}")
+                log_image_error(f"Warning: No read permission for image {img_path}")
             else:
                 try:
                     # Check if it's a preprocessed .npy file
@@ -1244,7 +1274,7 @@ class DatasetProcessor:
                             image_features = np.load(img_path).astype(np.float32)
                             has_valid_image = True
                         except Exception as e:
-                            print(f"Error loading .npy image {img_path}: {e}")
+                            log_image_error(f"Error loading .npy image {img_path}: {e}")
                     else:
                         # Process regular image file
                         from src.data.image_utils import preprocess_image
@@ -1256,12 +1286,12 @@ class DatasetProcessor:
                             )
                             has_valid_image = True
                         except np.core._exceptions._ArrayMemoryError as me:
-                            print(f"Memory error processing image {img_path}. Using zeros instead: {me}")
+                            log_image_error(f"Memory error processing image {img_path}. Using zeros instead: {me}")
                             # Keep the zero array created above
                         except Exception as e:
-                            print(f"Error preprocessing image {img_path}: {e}")
+                            log_image_error(f"Error preprocessing image {img_path}: {e}")
                 except Exception as e:
-                    print(f"Error preprocessing image {img_path}: {e}")
+                    log_image_error(f"Error preprocessing image {img_path}: {e}")
         
         # If we don't have a valid image, create a synthetic one
         if not has_valid_image:
@@ -1568,7 +1598,7 @@ class DatasetProcessor:
         return True
     
     def fix_fakeddit_paths(self):
-        """Fix image paths for Fakeddit dataset"""
+        """Fix image paths for Fakeddit dataset. Run before training if image path errors are detected."""
         fakeddit_path = os.path.join(self.processed_dir, 'fakeddit_processed.csv')
         if not os.path.exists(fakeddit_path):
             print(f"Fakeddit processed data not found at {fakeddit_path}")
@@ -1618,7 +1648,7 @@ class DatasetProcessor:
         return df
 
     def fix_fakenewsnet_paths(self):
-        """Fix image paths for FakeNewsNet dataset"""
+        """Fix image paths for FakeNewsNet dataset. Run before training if image path errors are detected."""
         fakenewsnet_path = os.path.join(self.processed_dir, 'fakenewsnet_processed.csv')
         if not os.path.exists(fakenewsnet_path):
             print(f"FakeNewsNet processed data not found at {fakenewsnet_path}")
@@ -1664,7 +1694,7 @@ class DatasetProcessor:
         return df
     
     def fix_all_image_paths(self):
-        """Analyze and fix all image paths across datasets"""
+        """Analyze and fix all image paths across datasets. Run before training if image path errors are detected."""
         print("\n===== Analyzing and fixing all image paths =====")
         
         # Step 1: Analyze current image paths
@@ -1733,3 +1763,66 @@ class DatasetProcessor:
         
         print("\n===== Image path fixing completed =====")
         return True
+
+    def _build_categorical_vocabs(self, df):
+        # Source
+        sources = df['metadata'].apply(lambda m: safe_json_loads(m).get('source', ''))
+        sources = sources.apply(lambda v: '' if pd.isna(v) else str(v))
+        self.source_vocab = {v: i+1 for i, v in enumerate(sorted(set(sources)))}
+        self.source_vocab['<UNK>'] = 0
+        # Subreddit
+        if 'subreddit' in df.columns:
+            subreddits = df['metadata'].apply(lambda m: safe_json_loads(m).get('subreddit', ''))
+            subreddits = subreddits.apply(lambda v: '' if pd.isna(v) else str(v))
+            self.subreddit_vocab = {v: i+1 for i, v in enumerate(sorted(set(subreddits)))}
+            self.subreddit_vocab['<UNK>'] = 0
+        # Author (if available)
+        authors = set()
+        for m in df['metadata']:
+            try:
+                meta = safe_json_loads(m)
+                if 'authors' in meta and isinstance(meta['authors'], list):
+                    for a in meta['authors']:
+                        if pd.isna(a):
+                            continue
+                        authors.add(str(a))
+            except:
+                continue
+        self.author_vocab = {v: i+1 for i, v in enumerate(sorted(authors))}
+        self.author_vocab['<UNK>'] = 0
+        self._vocab_ready = True
+        # Log vocab sizes
+        logger.info(f"Source vocab size: {len(self.source_vocab)}")
+        logger.info(f"Subreddit vocab size: {len(self.subreddit_vocab)}")
+        logger.info(f"Author vocab size: {len(self.author_vocab)}")
+        # Save vocabs
+        vocab_dir = os.path.join(self.processed_dir, 'vocabs')
+        os.makedirs(vocab_dir, exist_ok=True)
+        with open(os.path.join(vocab_dir, 'source_vocab.json'), 'w') as f:
+            json.dump(self.source_vocab, f)
+        with open(os.path.join(vocab_dir, 'subreddit_vocab.json'), 'w') as f:
+            json.dump(self.subreddit_vocab, f)
+        with open(os.path.join(vocab_dir, 'author_vocab.json'), 'w') as f:
+            json.dump(self.author_vocab, f)
+
+    def _map_categorical_indices(self, row):
+        # Map source, subreddit, author to indices
+        meta = safe_json_loads(row['metadata'])
+        source = meta.get('source', '')
+        subreddit = meta.get('subreddit', '')
+        authors = meta.get('authors', []) if 'authors' in meta else []
+        source_idx = self.source_vocab.get(source, self.source_vocab.get('<UNK>', 0))
+        subreddit_idx = self.subreddit_vocab.get(subreddit, self.subreddit_vocab.get('<UNK>', 0))
+        author_idx = self.author_vocab.get(authors[0], self.author_vocab.get('<UNK>', 0)) if authors else self.author_vocab.get('<UNK>', 0)
+        return source_idx, subreddit_idx, author_idx
+
+def safe_json_loads(s):
+    if not isinstance(s, str):
+        return {}
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(s)
+        except Exception:
+            return {}

@@ -5,49 +5,37 @@ from typing import List, Dict, Any
 
 def get_image_paths(article_id: str, dataset_name: str, images_dir: str) -> List[str]:
     """Get image paths for an article based on dataset type"""
+    image_paths = []
     if dataset_name == 'fakeddit':
-        # For Fakeddit, images are named by their ID in the public_image_set folder
         image_dir = os.path.join(images_dir, 'fakeddit', 'public_image_set')
-        image_path = os.path.join(image_dir, f"{article_id}.jpg")
-        
-        # Check if image exists
-        if os.path.exists(image_path):
-            return [image_path]
-            
-        # Try other extensions if jpg doesn't exist
-        for ext in ['png', 'jpeg', 'gif', 'webp']:
-            alt_path = os.path.join(image_dir, f"{article_id}.{ext}")
-            if os.path.exists(alt_path):
-                return [alt_path]
-                
+        for ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+            image_path = os.path.join(image_dir, f"{article_id}.{ext}")
+            if os.path.exists(image_path):
+                return [image_path]
+        # Log missing image
+        missing_log = os.path.join('logs', 'missing_images.log')
+        with open(missing_log, 'a') as f:
+            f.write(f"Missing Fakeddit image: {article_id} in {image_dir}\n")
         return []
-        
     elif dataset_name == 'fakenewsnet':
-        # Extract source and article ID from combined ID (format: source_article-id)
-        # Example: gossipcop_gossipcop-12345
         parts = article_id.split('_')
         if len(parts) < 2:
             return []
-            
-        source = parts[0]  # gossipcop or politifact
-        article_dir = parts[1]  # For example, gossipcop-12345
-        
-        # Both label directories (real/fake) need to be checked
+        source = parts[0]
+        article_dir = parts[1]
         paths = []
         for label in ['real', 'fake']:
-            # Images for FakeNewsNet are in directories matching the dataset structure
             article_img_dir = os.path.join(images_dir, source, label, article_dir)
-            
-            # Check if directory exists
             if os.path.exists(article_img_dir):
-                # Get all image files in this directory
                 for filename in os.listdir(article_img_dir):
                     file_path = os.path.join(article_img_dir, filename)
                     if os.path.isfile(file_path) and _is_image_file(filename):
                         paths.append(file_path)
-        
+        if not paths:
+            missing_log = os.path.join('logs', 'missing_images.log')
+            with open(missing_log, 'a') as f:
+                f.write(f"Missing FakeNewsNet image: {article_id} in {images_dir}\n")
         return paths
-        
     return []
 
 def _is_image_file(filename: str) -> bool:

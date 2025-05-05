@@ -1,0 +1,136 @@
+{
+    "data": {
+        "base_dir": "data",
+        "raw_dir": "data/raw",
+        "processed_dir": "data/processed",
+        "images_dir": "data/images",
+        "cache_dir": "data/cache",
+        "max_text_length": 128,
+        "max_vocab_size": 20000,
+        "val_split": 0.15,
+        "test_split": 0.15,
+        "random_seed": 42,
+        "train_ratio": 0.7,
+        "val_ratio": 0.15,
+        "datasets": [
+            "fakeddit",
+            "fakenewsnet"
+        ],
+        "fakeddit": {
+            "base_dir": "data/raw/fakeddit",
+            "images_dir": "data/images/fakeddit/public_image_set",
+            "files": [
+                "data/raw/fakeddit/multimodal_train.tsv",
+                "data/raw/fakeddit/multimodal_test_public.tsv",
+                "data/raw/fakeddit/multimodal_validate.tsv"
+            ]
+        },
+        "fakenewsnet": {
+            "base_dir": "data/raw/fakenewsnet",
+            "images_dir": "data/images/fakenewsnet",
+            "sources": [
+                "gossipcop",
+                "politifact"
+            ],
+            "labels": [
+                "fake",
+                "real"
+            ],
+            "news_content_file": "news content.json"
+        },
+        "allow_synthetic_images": false,
+        "num_parallel_calls": 2,
+        "prefetch_buffer_size": 2
+    },
+    "model": {
+        "text": {
+            "embedding_dim": 300,
+            "lstm_units": 128,
+            "dropout_rate": 0.3,
+            "attention_heads": 8,
+            "visualize_attention": true
+        },
+        "image": {
+            "input_shape": [
+                224,
+                224,
+                3
+            ],
+            "backbone": "yolov11",
+            "trainable": false,
+            "pooling": "avg",
+            "dropout_rate": 0.2,
+            "use_attention": true,
+            "output_dim": 512,
+            "width_mult": 0.75,
+            "depth_mult": 0.67,
+            "use_fpn": true
+        },
+        "fusion": {
+            "fusion_method": "cross_attention",
+            "feature_dim": 256,
+            "hidden_units": [
+                512,
+                256,
+                128
+            ],
+            "dropout_rate": 0.3,
+            "transformer_layers": 2,
+            "attention_heads": 8,
+            "use_spectral_norm": true,
+            "use_stochastic_depth": true,
+            "stochastic_depth_rate": 0.1,
+            "l1_reg": "1e-5",
+            "l2_reg": "1e-4"
+        }
+    },
+    "training": {
+        "batch_size": 16,
+        "epochs": 50,
+        "learning_rate": 0.001,
+        "optimizer": "adamw",
+        "weight_decay": 0.01,
+        "scheduler": "cosine",
+        "early_stopping": true,
+        "early_stopping_patience": 5,
+        "gradient_clip_norm": 1.0,
+        "gradient_accumulation_steps": 1,
+        "use_mixed_precision": true
+    },
+    "loss": {
+        "name": "focal",
+        "gamma": 2.0,
+        "alpha": 0.5
+    },
+    "evaluation": {
+        "metrics": [
+            "accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "auc"
+        ],
+        "visualize_confusion_matrix": true,
+        "visualize_roc_curve": true,
+        "save_predictions": true
+    },
+    "explainability": {
+        "methods": [
+            "lime",
+            "shap"
+        ],
+        "num_samples": 100,
+        "save_explanations": true,
+        "visualize_attention": true,
+        "visualize_saliency": true
+    },
+    "output": {
+        "model_dir": "models",
+        "log_dir": "logs",
+        "explanation_dir": "explanations",
+        "tensorboard_dir": "logs/tensorboard",
+        "save_best_model": true,
+        "save_checkpoints": true,
+        "checkpoint_frequency": 5
+    }
+}
