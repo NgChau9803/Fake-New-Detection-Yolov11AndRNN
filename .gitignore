@@ -50,3 +50,5 @@ miniconda.sh
 .cursor/rules/
 
 .cursor/*
+
+models/
