@@ -47,6 +47,8 @@ data:
   allow_synthetic_images: false
   num_parallel_calls: 2
   prefetch_buffer_size: 2
+  shuffle_buffer_size: 1000   # Limit shuffle buffer to avoid RAM blowup
+  batch_mem_threshold: 0.5    # Fraction of available RAM to allow per batch
 
   # --- AGGRESSIVE IMBALANCE HANDLING (recommended for low recall/minority class) ---
   balanced_sampling: true  # Enable advanced class balancing
@@ -59,8 +61,11 @@ model:
     embedding_dim: 300
     lstm_units: 128
     dropout_rate: 0.3
-    attention_heads: 8
+    attention_heads: 8 # 8
     visualize_attention: true
+    use_hf_transformer: true
+    transformer_trainable: false
+    concat_transformer_bilstm: false
   
   # Image model configuration
   image:
@@ -68,9 +73,9 @@ model:
     backbone: "yolov11"
     trainable: false
     pooling: 'avg'
-    dropout_rate: 0.2
+    dropout_rate: 0.3
     use_attention: true
-    output_dim: 512
+    output_dim: 128
     # YOLOv11 specific parameters
     width_mult: 0.75  # Width multiplier for model capacity control
     depth_mult: 0.67  # Depth multiplier for model capacity control
@@ -97,7 +102,10 @@ training:
   learning_rate: 0.001
   optimizer: "adamw"  # Options: adam, adamw, sgd, radam
   weight_decay: 0.01
-  scheduler: "cosine"  # Options: cosine, step, plateau
+  scheduler: "plateau"  # Changed from "cosine" to "plateau" for adaptive LR
+  reduce_lr_factor: 0.5  # Reduce LR by half when plateaued
+  reduce_lr_patience: 3  # Wait 3 epochs before reducing LR
+  min_lr: 1e-6           # Minimum learning rate
   early_stopping: true
   early_stopping_patience: 5
   gradient_clip_norm: 1.0

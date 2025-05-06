@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow.keras import layers
 import numpy as np
+from transformers import TFDistilBertModel, DistilBertTokenizerFast
 
 class MultiHeadSelfAttention(tf.keras.layers.Layer):
     """Multi-head self-attention mechanism"""
@@ -107,98 +108,105 @@ class TransformerBlock(tf.keras.layers.Layer):
         return self.att.get_attention_weights()
 
 
+class TransformerTextFeatureExtractor(tf.keras.layers.Layer):
+    def __init__(self, model_name='distilbert-base-uncased', trainable=False, **kwargs):
+        super().__init__(**kwargs)
+        self.model_name = model_name
+        self.transformer = TFDistilBertModel.from_pretrained(model_name)
+        self.tokenizer = DistilBertTokenizerFast.from_pretrained(model_name)
+        self.transformer.trainable = trainable
+
+    def call(self, input_texts):
+        # input_texts: batch of strings (not token ids)
+        inputs = self.tokenizer(
+            input_texts, padding=True, truncation=True, return_tensors='tf'
+        )
+        outputs = self.transformer(inputs)
+        cls_embedding = outputs.last_hidden_state[:, 0, :]  # [CLS] token
+        return cls_embedding
+
+
 class TextFeatureExtractor(tf.keras.Model):
     """Text feature extractor using BiLSTM and attention mechanisms"""
     
     def __init__(self, vocab_size, embedding_dim=300, rnn_units=128, 
-                 dropout=0.3, attention_heads=4, use_transformer=True):
+                 dropout=0.3, attention_heads=4, use_transformer=True, use_hf_transformer=False, transformer_trainable=False, concat_transformer_bilstm=False):
         super(TextFeatureExtractor, self).__init__()
-        
-        self.vocab_size = vocab_size
-        self.embedding_dim = embedding_dim
-        self.rnn_units = rnn_units
-        self.attention_heads = attention_heads
-        self.use_transformer = use_transformer
-        
-        # Embedding layer
-        self.embedding = layers.Embedding(
-            input_dim=vocab_size,
-            output_dim=embedding_dim,
-            mask_zero=True
-        )
-        
-        # Bidirectional LSTM 
-        self.bilstm = layers.Bidirectional(
-            layers.LSTM(
-                units=rnn_units,
-                return_sequences=True,
-                return_state=True,
-                dropout=dropout,
-                recurrent_dropout=0,  # For CuDNN compatibility
-                recurrent_activation='sigmoid'
+        self.use_hf_transformer = use_hf_transformer
+        self.concat_transformer_bilstm = concat_transformer_bilstm
+        if use_hf_transformer:
+            self.transformer = TransformerTextFeatureExtractor(trainable=transformer_trainable)
+            self.output_dense = layers.Dense(rnn_units * 2)
+            self.dropout = layers.Dropout(dropout)
+        if not use_hf_transformer or concat_transformer_bilstm:
+            # ... existing BiLSTM+attention code ...
+            self.vocab_size = vocab_size
+            self.embedding_dim = embedding_dim
+            self.rnn_units = rnn_units
+            self.attention_heads = attention_heads
+            self.use_transformer = use_transformer
+            self.embedding = layers.Embedding(
+                input_dim=vocab_size,
+                output_dim=embedding_dim,
+                mask_zero=True
             )
-        )
-        
-        # Transformer block if enabled
-        if use_transformer:
-            self.transformer_block = TransformerBlock(
-                embed_dim=rnn_units * 2,  # Double for bidirectional
-                num_heads=attention_heads,
-                ff_dim=rnn_units * 4,
-                rate=dropout
+            self.bilstm = layers.Bidirectional(
+                layers.LSTM(
+                    units=rnn_units,
+                    return_sequences=True,
+                    return_state=True,
+                    dropout=dropout,
+                    recurrent_dropout=0,
+                    recurrent_activation='sigmoid'
+                )
             )
-        
-        # Multi-head attention
-        self.attention = MultiHeadSelfAttention(
-            embed_dim=rnn_units * 2,  # Double for bidirectional
-            num_heads=attention_heads
-        )
-        
-        # Output pooling layer
-        self.global_max_pool = layers.GlobalMaxPooling1D()
-        self.global_avg_pool = layers.GlobalAveragePooling1D()
-        
-        # Final dense layer
-        self.output_dense = layers.Dense(rnn_units * 2)
-        self.dropout = layers.Dropout(dropout)
+            if use_transformer:
+                self.transformer_block = TransformerBlock(
+                    embed_dim=rnn_units * 2,
+                    num_heads=attention_heads,
+                    ff_dim=rnn_units * 4,
+                    rate=dropout
+                )
+            self.attention = MultiHeadSelfAttention(
+                embed_dim=rnn_units * 2,
+                num_heads=attention_heads
+            )
+            self.global_max_pool = layers.GlobalMaxPooling1D()
+            self.global_avg_pool = layers.GlobalAveragePooling1D()
+            self.bilstm_output_dense = layers.Dense(rnn_units * 2)
+            self.bilstm_dropout = layers.Dropout(dropout)
         
     def call(self, inputs, training=False):
-        # Get input mask from embedding layer
-        mask = tf.cast(tf.math.not_equal(inputs, 0), tf.float32)
-        mask = tf.expand_dims(mask, -1)
-        
-        # Create embeddings
-        x = self.embedding(inputs)
-        
-        # Apply BiLSTM
-        lstm_outputs, forward_h, forward_c, backward_h, backward_c = self.bilstm(x)
-        
-        # Apply mask
-        lstm_outputs = lstm_outputs * mask
-        
-        # Apply transformer if enabled
-        if self.use_transformer:
-            transformed = self.transformer_block(lstm_outputs, training=training)
-            transformed = transformed * mask
+        features = []
+        if self.use_hf_transformer:
+            # inputs: batch of strings
+            transformer_features = self.transformer(inputs)
+            features.append(transformer_features)
+        if not self.use_hf_transformer or self.concat_transformer_bilstm:
+            # inputs: batch of token ids
+            mask = tf.cast(tf.math.not_equal(inputs, 0), tf.float32)
+            mask = tf.expand_dims(mask, -1)
+            x = self.embedding(inputs)
+            lstm_outputs, forward_h, forward_c, backward_h, backward_c = self.bilstm(x)
+            lstm_outputs = lstm_outputs * mask
+            if self.use_transformer:
+                transformed = self.transformer_block(lstm_outputs, training=training)
+                transformed = transformed * mask
+            else:
+                transformed = lstm_outputs
+            attended = self.attention(transformed)
+            attended = attended * mask
+            max_pool = self.global_max_pool(attended)
+            avg_pool = self.global_avg_pool(attended)
+            concat_h = tf.concat([forward_h, backward_h], axis=-1)
+            concat_pooled = tf.concat([max_pool, avg_pool], axis=-1)
+            bilstm_features = self.bilstm_output_dense(tf.concat([concat_pooled, concat_h], axis=-1))
+            bilstm_features = self.bilstm_dropout(bilstm_features, training=training)
+            features.append(bilstm_features)
+        if len(features) > 1:
+            features = tf.concat(features, axis=-1)
         else:
-            transformed = lstm_outputs
-        
-        # Apply attention
-        attended = self.attention(transformed)
-        attended = attended * mask
-        
-        # Apply pooling (combining multiple feature extraction techniques)
-        max_pool = self.global_max_pool(attended)
-        avg_pool = self.global_avg_pool(attended)
-        
-        # Concatenate states and pooled features
-        concat_h = tf.concat([forward_h, backward_h], axis=-1)
-        concat_pooled = tf.concat([max_pool, avg_pool], axis=-1)
-        
-        # Final feature representation
-        features = self.output_dense(tf.concat([concat_pooled, concat_h], axis=-1))
-        features = self.dropout(features, training=training)
-        
+            features = features[0]
         return features
     
     def get_attention_weights(self):

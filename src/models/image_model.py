@@ -328,7 +328,7 @@ class ImageFeatureExtractor(keras.Model):
         input_shape=(224, 224, 3),
         backbone_type="resnet50",
         pretrained=True,
-        output_dim=512,
+        output_dim=128,
         dropout_rate=0.2,
         l2_regularization=1e-5,
         use_attention=True,

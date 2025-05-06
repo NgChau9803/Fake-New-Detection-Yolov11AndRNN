@@ -1094,14 +1094,25 @@ class DatasetProcessor:
                 tf.TensorSpec(shape=(), dtype=tf.float32)
                 )
             ds = tf.data.Dataset.from_generator(generator, output_signature=output_signature)
+            # Use configurable shuffle buffer size to limit in-memory shuffle
+            shuffle_buffer_size = self.config['data'].get('shuffle_buffer_size', 1000)
+            shuffle_buffer_size = min(shuffle_buffer_size, len(df_split))
             if shuffle_split:
-                ds = ds.shuffle(buffer_size=min(10000, len(df_split)), seed=random_seed)
+                ds = ds.shuffle(buffer_size=shuffle_buffer_size, seed=random_seed)
+
+            # Determine batch size and auto-adjust based on available RAM
             batch_size = self.config['training'].get('batch_size', 32)
-            # Warn if batch size is too large for available RAM
             import psutil
-            available_gb = psutil.virtual_memory().available / (1024**3)
-            if batch_size * 224 * 224 * 3 * 4 / (1024**3) > available_gb * 0.5:
-                logger.warning(f"Batch size {batch_size} may be too large for available RAM ({available_gb:.2f} GB)")
+            available_bytes = psutil.virtual_memory().available
+            # Estimate bytes per batch (images only): height*width*channels*float_size
+            bytes_per_image = 224 * 224 * 3 * 4
+            batch_footprint = batch_size * bytes_per_image
+            threshold = self.config['data'].get('batch_mem_threshold', 0.5)
+            if batch_footprint > available_bytes * threshold:
+                new_batch_size = max(1, batch_size // 2)
+                logger.info(f"Auto-adjusting batch size from {batch_size} to {new_batch_size} due to low available RAM ({available_bytes/(1024**3):.2f} GB)")
+                batch_size = new_batch_size
+
             ds = ds.batch(batch_size)
             # Map to load and preprocess images
             def load_and_preprocess_image(features, label):
@@ -1122,7 +1133,7 @@ class DatasetProcessor:
                 else:
                     features['metadata'] = tf.cast(features['metadata'], tf.float32)
                 label = tf.reshape(label, [-1])
-                tf.print('DEBUG: label shape', tf.shape(label), 'dtype', label.dtype)
+                # tf.print('DEBUG: label shape', tf.shape(label), 'dtype', label.dtype)
                 return features, label
             # Use config for num_parallel_calls and prefetch buffer size
             num_parallel_calls = self.config['data'].get('num_parallel_calls', 2)

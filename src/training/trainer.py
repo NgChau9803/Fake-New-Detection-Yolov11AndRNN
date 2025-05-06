@@ -272,8 +272,8 @@ class ModelTrainer:
         )
         callbacks.append(tensorboard_callback)
         
-        # Learning rate scheduler (if not using cosine annealing)
-        if self.scheduler_type == 'reduce_on_plateau':
+        # Learning rate scheduler (ReduceLROnPlateau for 'plateau' or 'reduce_on_plateau')
+        if self.scheduler_type in ['plateau', 'reduce_on_plateau']:
             reduce_lr = ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=self.config['training'].get('reduce_lr_factor', 0.5),

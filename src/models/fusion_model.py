@@ -204,6 +204,15 @@ class MultiModalFusionModel(tf.keras.Model):
         self.subreddit_embedding = tf.keras.layers.Embedding(self.subreddit_vocab_size, self.categorical_embedding_dim, mask_zero=True, name='subreddit_embedding')
         self.author_embedding = tf.keras.layers.Embedding(self.author_vocab_size, self.categorical_embedding_dim, mask_zero=True, name='author_embedding')
         
+        # --- Modality Gates for Biasing Fusion ---
+        # These gates are trainable scalars that weight each modality before fusion
+        # Text and metadata gates are initialized to 1.0, image gate to 0.5 (less focus)
+        self.text_gate = tf.Variable(1.0, trainable=True, dtype=tf.float32, name='text_gate')
+        self.image_gate = tf.Variable(0.5, trainable=True, dtype=tf.float32, name='image_gate')
+        self.metadata_gate = tf.Variable(1.0, trainable=True, dtype=tf.float32, name='metadata_gate')
+        # Modality dropout rate for image (optional, only during training)
+        self.image_modality_dropout_rate = config['model']['fusion'].get('image_modality_dropout', 0.3)
+        
     def _create_projection_layer(self, dim):
         """Helper function to create projection layers with optional spectral normalization"""
         if self.use_spectral_norm:
@@ -245,7 +254,6 @@ class MultiModalFusionModel(tf.keras.Model):
         source_emb = self.source_embedding(inputs['source_idx'])
         subreddit_emb = self.subreddit_embedding(inputs['subreddit_idx'])
         author_emb = self.author_embedding(inputs['author_idx'])
-        # Concatenate all categorical embeddings
         cat_emb = tf.concat([source_emb, subreddit_emb, author_emb], axis=-1)
         
         # Process metadata
@@ -253,7 +261,6 @@ class MultiModalFusionModel(tf.keras.Model):
         metadata_features = self.metadata_dense1(metadata)
         metadata_features = self.metadata_dense2(metadata_features)
         metadata_features = self.metadata_norm(metadata_features)
-        # Concatenate dense metadata and categorical embeddings
         metadata_all = tf.concat([metadata_features, cat_emb], axis=-1)
         
         # Project features to the same dimension
@@ -261,81 +268,64 @@ class MultiModalFusionModel(tf.keras.Model):
         image_features = self.image_feature_norm(image_features)
         metadata_features = self.metadata_feature_norm(metadata_all)
         
+        # --- Apply Modality Gates (Bias toward text/metadata) ---
+        gated_text = self.text_gate * text_features
+        gated_image = self.image_gate * image_features
+        gated_metadata = self.metadata_gate * metadata_features
+        
+        # --- (Optional) Modality Dropout for Image ---
+        if training and self.image_modality_dropout_rate > 0.0:
+            # With probability p, zero out the image branch
+            drop_mask = tf.cast(tf.random.uniform([tf.shape(gated_image)[0]]) > self.image_modality_dropout_rate, tf.float32)
+            drop_mask = tf.expand_dims(drop_mask, -1)
+            gated_image = gated_image * drop_mask
+        
         # Apply fusion based on selected method
         if self.fusion_method == 'concat':
-            # Simple concatenation
-            combined_features = tf.concat([text_features, image_features, metadata_features], axis=1)
+            combined_features = tf.concat([gated_text, gated_image, gated_metadata], axis=1)
         
         elif self.fusion_method in ['cross_attention', 'transformer']:
-            # Transformer-based cross-modal fusion
-            # Reshape features for attention mechanism
-            batch_size = tf.shape(text_features)[0]
-            
-            # Create token sequences for each modality
-            # Add sequence dimension to make it [batch, seq_len=1, feat_dim]
-            text_tokens = tf.expand_dims(text_features, 1)
-            image_tokens = tf.expand_dims(image_features, 1)
-            metadata_tokens = tf.expand_dims(metadata_features, 1)
-            
-            # Concatenate tokens from different modalities to form a sequence
-            # Result: [batch, seq_len=3, feat_dim]
+            batch_size = tf.shape(gated_text)[0]
+            text_tokens = tf.expand_dims(gated_text, 1)
+            image_tokens = tf.expand_dims(gated_image, 1)
+            metadata_tokens = tf.expand_dims(gated_metadata, 1)
             multimodal_tokens = tf.concat([text_tokens, image_tokens, metadata_tokens], axis=1)
-            
-            # Apply transformer layers
             x = multimodal_tokens
             for i in range(len(self.cross_attention_layers)):
-                # Multi-head cross-attention
                 attn_output = self.cross_attention_layers[i](
                     query=x, 
                     key=x, 
                     value=x,
                     training=training
                 )
-                
-                # Add & Norm (residual connection)
                 x = self.layer_norms[i][0](x + attn_output)
-                
-                # Feed Forward network
                 ffn_output = self.feed_forward_layers[i](x)
-                
-                # Add & Norm (residual connection)
                 x = self.layer_norms[i][1](x + ffn_output)
-            
-            # Extract modality-specific features after cross-attention
-            text_attended = x[:, 0, :]    # First token corresponds to text
-            image_attended = x[:, 1, :]   # Second token corresponds to image
-            metadata_attended = x[:, 2, :] # Third token corresponds to metadata
-            
-            # Combine attended features
+            text_attended = x[:, 0, :]
+            image_attended = x[:, 1, :]
+            metadata_attended = x[:, 2, :]
             combined_features = tf.concat([
                 text_attended, image_attended, metadata_attended
             ], axis=1)
-            
-            # Project to final fusion representation
             combined_features = self.cross_modal_projection(combined_features)
-            
+        
         elif self.fusion_method == 'gmu':
-            # Gated multimodal fusion
-            text_image_gated = self.gated_multimodal_unit(
-                [text_features, image_features]
-            )
-            combined_features = tf.concat([text_image_gated, metadata_features], axis=1)
-            
+            text_image_gated = self.gated_multimodal_unit([
+                gated_text, gated_image
+            ])
+            combined_features = tf.concat([text_image_gated, gated_metadata], axis=1)
+        
         elif self.fusion_method == 'mutan':
-            # Multimodal Tucker fusion (MUTAN)
-            text_image_mutan = self.mutan_fusion([text_features, image_features])
-            combined_features = tf.concat([text_image_mutan, metadata_features], axis=1)
-            
+            text_image_mutan = self.mutan_fusion([gated_text, gated_image])
+            combined_features = tf.concat([text_image_mutan, gated_metadata], axis=1)
+        
         elif self.fusion_method == 'film':
-            # Feature-wise Linear Modulation (FiLM)
-            # Use text to modulate image features
-            film_params = self.film_generator(text_features)
-            modulated_image = film_params['gamma'] * image_features + film_params['beta']
-            combined_features = tf.concat([text_features, modulated_image, metadata_features], axis=1)
-            
+            film_params = self.film_generator(gated_text)
+            modulated_image = film_params['gamma'] * gated_image + film_params['beta']
+            combined_features = tf.concat([gated_text, modulated_image, gated_metadata], axis=1)
+        
         else:
-            # Default to simple concatenation
-            combined_features = tf.concat([text_features, image_features, metadata_features], axis=1)
+            combined_features = tf.concat([gated_text, gated_image, gated_metadata], axis=1)
         
         # Apply fusion layers
         x = combined_features
